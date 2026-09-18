@@ -1,0 +1,74 @@
+# ---- Visual Studio / MSVC ----
+.vs/
+*.user
+*.suo
+*.ipch
+*.ilk
+*.pch
+*.obj
+*.pch
+*.res
+*.tlb
+*.tlog
+*.lib
+*.pdb
+*.exp
+*.manifest
+*.sdf
+*.cache
+*.ncx
+*.resx
+*.resw
+*.xml
+*.log
+
+# ---- CMake / Ninja ----
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakePresets.json
+CMakeUserPresets.json
+*.cache
+*.ninja
+*.ninja_log
+*.txt
+*.json  # exclude if you want to keep your own config files
+# Keep your own CMakePresets.json if it's part of the repo:
+!CMakePresets.json
+
+# ---- vcpkg (local) ----
+vcpkg_installed/
+vcpkg/
+!vcpkg.json
+!vcpkg-configuration.json
+
+# ---- Editor / IDE ----
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Map-Maker specific ----
+Assets/
+Texture/
+Material/
+Save/
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ---- Debug / Profiling ----
+*.profraw
+*.profdata
+profiling/
+coverage/
+
+# ---- Git ----
+.gitattributes
+.gitmodules

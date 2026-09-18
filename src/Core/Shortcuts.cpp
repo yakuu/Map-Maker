@@ -77,19 +77,22 @@ std::string Shortcuts::keyName(int code) {
     if (n) return std::string(n);
 
     switch (code) {
-        case GLFW_KEY_SPACE:      return "Space";
-        case GLFW_KEY_ESCAPE:     return "Esc";
-        case GLFW_KEY_ENTER:      return "Enter";
-        case GLFW_KEY_TAB:        return "Tab";
-        case GLFW_KEY_BACKSPACE:  return "Backspace";
-        case GLFW_KEY_DELETE:     return "Del";
-        case GLFW_KEY_LEFT:       return "Left";
-        case GLFW_KEY_RIGHT:      return "Right";
-        case GLFW_KEY_UP:         return "Up";
-        case GLFW_KEY_DOWN:       return "Down";
-        case GLFW_KEY_LEFT_SHIFT: return "Shift";
-        case GLFW_KEY_LEFT_CTRL:  return "Ctrl";
-        case GLFW_KEY_LEFT_ALT:   return "Alt";
+        case GLFW_KEY_SPACE:         return "Space";
+        case GLFW_KEY_ESCAPE:        return "Esc";
+        case GLFW_KEY_ENTER:         return "Enter";
+        case GLFW_KEY_TAB:           return "Tab";
+        case GLFW_KEY_BACKSPACE:     return "Backspace";
+        case GLFW_KEY_DELETE:        return "Del";
+        case GLFW_KEY_LEFT:          return "Left";
+        case GLFW_KEY_RIGHT:         return "Right";
+        case GLFW_KEY_UP:            return "Up";
+        case GLFW_KEY_DOWN:          return "Down";
+        case GLFW_KEY_LEFT_SHIFT:    return "LShift";
+        case GLFW_KEY_RIGHT_SHIFT:   return "RShift";
+        case GLFW_KEY_LEFT_CONTROL:  return "LCtrl";
+        case GLFW_KEY_RIGHT_CONTROL: return "RCtrl";
+        case GLFW_KEY_LEFT_ALT:      return "LAlt";
+        case GLFW_KEY_RIGHT_ALT:     return "RAlt";
         default: break;
     }
     if (code >= GLFW_KEY_F1 && code <= GLFW_KEY_F25)

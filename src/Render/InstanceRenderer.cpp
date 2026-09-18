@@ -68,8 +68,11 @@ void InstanceRenderer::shutdown() {
 Mesh& InstanceRenderer::ensureMesh(size_t hash, Mesh mesh) {
     auto it = meshes.find(hash);
     if (it != meshes.end()) return it->second;
-    mesh.name = mesh.name;
     return meshes.emplace(hash, std::move(mesh)).first->second;
+}
+
+void InstanceRenderer::setMesh(size_t hash, Mesh mesh) {
+    meshes[hash] = std::move(mesh);
 }
 
 Mesh* InstanceRenderer::getMesh(size_t hash) {
@@ -134,8 +137,4 @@ void InstanceRenderer::end() {
     }
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-}
-
-void InstanceRenderer::setMesh(size_t hash, Mesh mesh) {
-    meshes[hash] = std::move(mesh);
 }

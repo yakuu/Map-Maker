@@ -4,12 +4,14 @@
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 
 namespace {
@@ -49,10 +51,9 @@ bool Application::init() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Only write imgui.ini if it doesn't exist yet (so we can lay out programmatically first time)
     bool hadIni = std::filesystem::exists("imgui.ini");
     io.IniFilename = "imgui.ini";
-    dockBuilt = hadIni;   // if it exists, we trust user's saved layout
+    dockBuilt = hadIni;
 
     ImGui::StyleColorsDark();
     ImGuiStyle& st = ImGui::GetStyle();
@@ -151,7 +152,6 @@ void Application::frame(float dt) {
 
     tools.update(*this, dt);
 
-    // rebuild heightmap if dirty
     if (scene.heightmapVersion != renderedHeightmapVersion)
         rebuildHeightmapMesh();
 
@@ -247,7 +247,6 @@ void Application::drawScene() {
 
     renderer.begin(vp);
 
-    // heightmap first
     {
         glm::mat4 m(1.0f);
         renderer.submit(heightmapHash, m, glm::vec4(0.35f, 0.55f, 0.3f, 1.0f));
@@ -268,10 +267,8 @@ void Application::drawScene() {
 }
 
 void Application::drawUi() {
-    // 1) main dock host (leaves room for status bar at bottom)
     drawDockHost();
 
-    // 2) floating windows docked into host
     drawViewportWindow();
     tools.onImGui(*this);
 
@@ -319,8 +316,8 @@ void Application::drawUi() {
     ImGui::End();
 
     if (ImGui::Begin("Assets")) {
-        ImGui::TextDisabled("Assets/ .fbx .gltf .obj  →  press Import Asset…");
-        if (ImGui::Button("Import Asset…")) importModalOpen = true;
+        ImGui::TextDisabled("Assets/ .fbx .gltf .obj  ->  press Import Asset...");
+        if (ImGui::Button("Import Asset...")) importModalOpen = true;
         ImGui::Separator();
         std::error_code ec;
         if (std::filesystem::exists("Assets", ec)) {
@@ -367,7 +364,6 @@ void Application::drawUi() {
     }
     ImGui::End();
 
-    // toasts floating top-right
     float y = 40.0f;
     for (auto& t : toasts.items()) {
         ImVec4 col(0.2f, 0.2f, 0.2f, 0.9f);
@@ -387,10 +383,7 @@ void Application::drawUi() {
     }
 
     tools.drawRadialMenu(*this);
-
-    // status bar last so it sits on top
     tools.drawStatusBar(*this);
-
     drawImportModal();
 }
 
@@ -428,9 +421,9 @@ void Application::drawDockHost() {
         ImGui::DockBuilderSetNodeSize(dockId, hostSize);
 
         ImGuiID main = dockId;
-        ImGuiID left = ImGui::DockBuilderSplitNode(main, ImGuiDir_Left, 0.20f, nullptr, &main);
-        ImGuiID right = ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, 0.22f, nullptr, &main);
-        ImGuiID bottom = ImGui::DockBuilderSplitNode(main, ImGuiDir_Down, 0.28f, nullptr, &main);
+        ImGuiID left   = ImGui::DockBuilderSplitNode(main, ImGuiDir_Left,  0.20f, nullptr, &main);
+        ImGuiID right  = ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, 0.22f, nullptr, &main);
+        ImGuiID bottom = ImGui::DockBuilderSplitNode(main, ImGuiDir_Down,  0.28f, nullptr, &main);
 
         ImGui::DockBuilderDockWindow("Tools", left);
         ImGui::DockBuilderDockWindow("Scene", left);
@@ -451,11 +444,11 @@ void Application::drawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
 
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Import Asset…")) importModalOpen = true;
+        if (ImGui::MenuItem("Import Asset...")) importModalOpen = true;
         ImGui::Separator();
         if (ImGui::MenuItem("Save (S)", "S"))   trySave();
         if (ImGui::MenuItem("Load (F9)"))       tryLoad();
-        if (ImGui::MenuItem("Export Map…")) {
+        if (ImGui::MenuItem("Export Map...")) {
             std::filesystem::create_directories("Save");
             std::string p = "Save/export_" + std::to_string((int)glfwGetTime()) + ".json";
             if (SaveIO::save(p, scene)) pushToast("Exported " + p);
@@ -474,7 +467,7 @@ void Application::drawMenuBar() {
 
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("GAT overlay", "G", &showGatOverlay);
-        ImGui::MenuItem("Texture overlay", nullptr, &showTextureOverlay);
+        ImGui::MenuItem("Texture overlay", "L", &showTextureOverlay);
         if (ImGui::MenuItem("Reset layout")) {
             std::filesystem::remove("imgui.ini");
             dockBuilt = false;
@@ -536,6 +529,10 @@ void Application::drawViewportWindow() {
                  ImVec2((float)viewportFbo.width(), (float)viewportFbo.height()),
                  ImVec2(0, 1), ImVec2(1, 0));
 
+    // Cache the on-screen rect of the viewport image so tools can ray-cast into it.
+    viewportImageMin  = origin;
+    viewportImageSize = ImVec2((float)viewportFbo.width(), (float)viewportFbo.height());
+
     bool hovered = ImGui::IsItemHovered();
     ImVec2 mouse = ImGui::GetIO().MousePos;
 
@@ -556,7 +553,6 @@ void Application::drawViewportWindow() {
         glm::vec3 dir = glm::normalize(b - a);
 
         if (std::abs(dir.y) > 1e-4f) {
-            // GAT hit (plane y = gatOrigin.y)
             float tG = (scene.gatOrigin.y - a.y) / dir.y;
             if (tG > 0.0f) {
                 glm::vec3 hit = a + dir * tG;
@@ -568,7 +564,6 @@ void Application::drawViewportWindow() {
                     hoveredGatCell.y = cy;
                 }
             }
-            // Heightmap hit (plane y = hmOrigin.y, first-pass)
             float tH = (scene.hmOrigin.y - a.y) / dir.y;
             if (tH > 0.0f) {
                 glm::vec3 hit = a + dir * tH;
@@ -606,7 +601,7 @@ void Application::drawGatOverlayInViewport() {
     if (viewportFbo.width() <= 0 || viewportFbo.height() <= 0) return;
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 origin = ImGui::GetItemRectMin();
+    ImVec2 origin = viewportImageMin;
     float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
     glm::mat4 vp = camera.projection(aspect) * camera.view();
 
@@ -669,7 +664,7 @@ void Application::drawTextureOverlayInViewport() {
     };
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 origin = ImGui::GetItemRectMin();
+    ImVec2 origin = viewportImageMin;
     float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
     glm::mat4 vp = camera.projection(aspect) * camera.view();
 
@@ -736,7 +731,7 @@ void Application::tryLoad() {
     std::string err;
     if (SaveIO::load("Save/map.json", scene, err)) {
         commands.clear();
-        renderedHeightmapVersion = -1;   // force rebuild
+        renderedHeightmapVersion = -1;
         pushToast("Loaded Save/map.json");
     } else {
         pushToast("Load failed: " + err, ToastLevel::Error);

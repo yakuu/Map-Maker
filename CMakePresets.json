@@ -4,13 +4,14 @@
   "configurePresets": [
     {
       "name": "default",
-      "displayName": "MSVC x64 (static)",
+      "displayName": "MSVC x64 (static, v143)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
+      "toolset": "v143",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-v143",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
       }
     }

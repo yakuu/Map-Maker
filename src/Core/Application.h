@@ -11,6 +11,7 @@
 #include "Tools/ToolManager.h"
 
 #include <glm/glm.hpp>
+#include <imgui.h>
 #include <string>
 #include <memory>
 
@@ -40,14 +41,17 @@ public:
     int selectedInstance = -1;
     size_t cubeHash = 0;
 
+    // Real on-screen rect of the viewport image (set every frame in drawViewportWindow)
+    ImVec2 viewportImageMin{ 0, 0 };
+    ImVec2 viewportImageSize{ 0, 0 };
+
     struct HoverCell { bool valid = false; int x = 0; int y = 0; };
     HoverCell hoveredGatCell;
 
     struct HmHover { bool valid = false; int x = 0; int y = 0; };
     HmHover hoveredHmVertex;
 
-    bool lastHeightmapEdit = false;
-    int  renderedHeightmapVersion = -1;
+    int    renderedHeightmapVersion = -1;
     size_t heightmapHash = 0xBEEFCAFEull;
 
     bool importModalOpen = false;

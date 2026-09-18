@@ -23,7 +23,7 @@ public:
     const char* name() const override { return "Select"; }
     const char* description() const override { return "Click an instance to select it."; }
     const char* statusHint() const override {
-        return "LMB: pick   |   RMB on viewport: look   |   Z: undo";
+        return "LMB: pick   |   RMB in viewport: look   |   Z: undo";
     }
 
     void onMouseDown(Application& app, int button, float mx, float my) override {
@@ -51,22 +51,18 @@ public:
 
 private:
     static int pick(Application& app, float mx, float my) {
-        // rebuild viewport rect from window position
-        ImVec2 winPos = ImGui::GetWindowPos();
-        ImVec2 cur = ImGui::GetCursorScreenPos();
+        float vpW = app.viewportImageSize.x;
+        float vpH = app.viewportImageSize.y;
+        if (vpW <= 0.0f || vpH <= 0.0f) return -1;
 
-        float vpW = (float)app.viewportFbo.width();
-        float vpH = (float)app.viewportFbo.height();
-        if (vpW <= 0 || vpH <= 0) return -1;
-
-        float originX = cur.x;
-        float originY = cur.y;
+        float originX = app.viewportImageMin.x;
+        float originY = app.viewportImageMin.y;
 
         float aspect = vpW / vpH;
         glm::mat4 vp = app.camera.projection(aspect) * app.camera.view();
 
         int best = -1;
-        float bestDist = 24.0f; // px
+        float bestDist = 24.0f;
 
         for (auto& i : app.scene.instances) {
             glm::vec4 clip = vp * glm::vec4(i.position, 1.0f);
@@ -154,13 +150,13 @@ class LandscapeTool : public ITool {
 public:
     enum class Mode { Raise, Lower, Smooth, Flatten };
     Mode mode = Mode::Raise;
-    float radius = 3.0f;   // in cells
+    float radius = 3.0f;
     float strength = 0.35f;
 
     const char* name() const override { return "Landscape"; }
     const char* description() const override { return "Sculpt the heightmap."; }
     const char* statusHint() const override {
-        return "LMB: apply   |   Shift: invert   |   1/2/3/4: mode   |   Tool panel: radius & strength";
+        return "LMB: apply   |   Tool panel: mode, radius, strength";
     }
 
     void onMouseDown(Application&, int button, float, float) override {
@@ -169,8 +165,7 @@ public:
     void onMouseUp(Application&, int, float, float) override { sculpting = false; }
 
     void onUpdate(Application& app, float) override {
-        if (sculpting) applyBrush(app, app.hoveredHmVertex, app.lastHeightmapEdit);
-        else app.lastHeightmapEdit = false;
+        if (sculpting) applyBrush(app, app.hoveredHmVertex);
     }
 
     void onImGui(Application&) override {
@@ -182,25 +177,31 @@ public:
     }
 
 private:
-    bool sculpting = false;
+    bool  sculpting = false;
+    bool  flattenValid = false;
+    float flattenTarget = 0.0f;
 
-    void applyBrush(Application& app, const Application::HmHover& hov, bool& dirty) {
-        dirty = false;
+    void applyBrush(Application& app, const Application::HmHover& hov) {
         if (!hov.valid) return;
         Scene& s = app.scene;
 
-        auto stamp = [&](int x, int y, float amount) {
+        if (mode == Mode::Flatten && !flattenValid) {
+            flattenTarget = s.hmAt(hov.x, hov.y);
+            flattenValid = true;
+        }
+
+        auto stamp = [&](int x, int y) {
             float dx = (float)(x - hov.x);
             float dy = (float)(y - hov.y);
             float d = std::sqrt(dx * dx + dy * dy);
             if (d > radius) return;
             float t = 1.0f - (d / radius);
-            t = t * t * (3.0f - 2.0f * t); // smoothstep falloff
+            t = t * t * (3.0f - 2.0f * t);
             float& h = s.hmAt(x, y);
 
             switch (mode) {
-                case Mode::Raise:  h += amount * t * strength; break;
-                case Mode::Lower:  h -= amount * t * strength; break;
+                case Mode::Raise:  h += t * strength; break;
+                case Mode::Lower:  h -= t * strength; break;
                 case Mode::Smooth: {
                     float avg = 0.0f; int n = 0;
                     for (int oy = -1; oy <= 1; ++oy)
@@ -216,22 +217,13 @@ private:
             }
         };
 
-        if (mode == Mode::Flatten && !flattenValid) {
-            flattenTarget = s.hmAt(hov.x, hov.y);
-            flattenValid = true;
-        }
-
         int r = (int)std::ceil(radius);
         for (int y = hov.y - r; y <= hov.y + r; ++y)
             for (int x = hov.x - r; x <= hov.x + r; ++x)
-                if (s.hmInBounds(x, y)) stamp(x, y, 1.0f);
+                if (s.hmInBounds(x, y)) stamp(x, y);
 
         s.heightmapVersion++;
-        dirty = true;
     }
-
-    bool  flattenValid = false;
-    float flattenTarget = 0.0f;
 };
 
 /* =====================================================================
@@ -247,7 +239,7 @@ public:
     const char* name() const override { return "Texture Paint"; }
     const char* description() const override { return "Assign a texture layer index per cell."; }
     const char* statusHint() const override {
-        return "LMB: paint   |   Tool panel: layer index & radius";
+        return "LMB: paint   |   Tool panel: layer index & radius   |   L: toggle overlay";
     }
 
     void onMouseDown(Application& app, int button, float, float) override {
@@ -287,28 +279,26 @@ private:
 class ImportTool : public ITool {
 public:
     char path[512] = "Assets/model.obj";
-    bool placeImported = true;
 
     const char* name() const override { return "Import Asset"; }
     const char* description() const override { return "Load an .obj/.fbx/.gltf and place it."; }
     const char* statusHint() const override {
-        return "Edit path, press Load  |   File: Import Asset… (also in menu bar)";
+        return "Edit path, press Load  |   Or File menu -> Import Asset...";
     }
 
     void onImGui(Application& app) override {
         ImGui::InputText("Path", path, sizeof(path));
-        ImGui::Checkbox("Place at origin after load", &placeImported);
         if (ImGui::Button("Load", ImVec2(120, 0))) {
-            doImport(app, path, placeImported);
+            doImport(app, path);
         }
         ImGui::SameLine();
-        if (ImGui::Button("File dialog…", ImVec2(140, 0))) {
+        if (ImGui::Button("Browse...", ImVec2(140, 0))) {
             app.importModalOpen = true;
         }
         ImGui::TextDisabled("Uses assimp (obj/fbx/gltf/glb/dae/ply/stl).");
     }
 
-    static bool doImport(Application& app, const std::string& p, bool place) {
+    static bool doImport(Application& app, const std::string& p) {
         Mesh m;
         std::string err;
         if (!AssetImporter::loadMeshInto(p, m, err)) {
@@ -318,13 +308,11 @@ public:
         size_t hash = std::hash<std::string>{}(p);
         app.renderer.setMesh(hash, std::move(m));
 
-        if (place) {
-            Instance inst;
-            inst.meshHash = hash;
-            inst.meshName = p;
-            inst.position = { 0, 0, 0 };
-            app.scene.addInstance(inst);
-        }
+        Instance inst;
+        inst.meshHash = hash;
+        inst.meshName = p;
+        inst.position = { 0, 0, 0 };
+        app.scene.addInstance(inst);
         app.pushToast("Imported " + p);
         return true;
     }
@@ -335,8 +323,7 @@ public:
    ===================================================================== */
 
 void ToolManager::init(Application& app) {
-    auto select = std::make_unique<SelectTool>();
-    addTool(std::move(select));
+    addTool(std::make_unique<SelectTool>());
 
     auto gat = std::make_unique<GATPaintTool>();
     gat->app_scene = &app.scene;
@@ -462,7 +449,6 @@ void ToolManager::drawStatusBar(Application& app) {
             ImGui::TextDisabled("| %s", t->statusHint());
         }
 
-        // right-hand side info
         char right[256];
         std::snprintf(right, sizeof(right),
                       "  Inst %d  |  Draws %d  |  Insts %d  |  Undo %d  Redo %d  ",

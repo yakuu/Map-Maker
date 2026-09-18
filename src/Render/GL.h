@@ -14,7 +14,7 @@ typedef char GLchar;
 typedef ptrdiff_t GLsizeiptr;
 typedef ptrdiff_t GLintptr;
 
-/* ---- constants not in the Win32 GL 1.1 header ---- */
+/* ---- constants not guaranteed by the Win32 GL 1.1 header ---- */
 #ifndef GL_ARRAY_BUFFER
 #define GL_ARRAY_BUFFER 0x8892
 #endif
@@ -71,6 +71,9 @@ typedef ptrdiff_t GLintptr;
 #endif
 #ifndef GL_MULTISAMPLE
 #define GL_MULTISAMPLE 0x809D
+#endif
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
 #endif
 
 /* ---- function pointer typedefs ---- */
