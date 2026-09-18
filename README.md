@@ -202,25 +202,39 @@ The requested function isn't in `LoadGLFunctions`. Add it to `GL.h` (typedef + e
 
 Delete `bin/imgui.ini` or use **View → Reset layout**. The default layout is built once per process the first time `imgui.ini` doesn't exist.
 
+
 ## Controls
 
-| Key | Action | Binding |
+Default bindings come from `config/shortcuts.json`. Mouse codes `1000+` are custom project codes; `1001` is right mouse, `1002` is middle mouse.
+
+| Action | Default binding | Shortcut ID |
 | --- | --- | --- |
-| W / A / S / D | Move camera forward/left/back/right | `camera.forward` / `camera.left` / `camera.back` / `camera.right` |
-| E / Q | Move camera up / down | `camera.up` / `camera.down` |
-| Left Shift | Fast move (4×) | `camera.fast` |
-| Right mouse (hold) | Capture cursor for look | `camera.capture` |
-| Middle mouse (hold) | Capture cursor for look | `camera.lookMB` |
-| Tab (hold) | Radial tool menu | `tool.radial` |
-| Esc | Release cursor / cancel | `tool.cancel` |
-| Z | Undo | `edit.undo` |
-| Y | Redo | `edit.redo` |
-| Delete | Delete selected instance | `edit.delete` |
-| F5 | Save to `Save/map.json` | `save.quick` |
-| F4 | Toggle GAT overlay | `view.toggleGat` |
-| L | Toggle texture-layer overlay | `view.toggleLandscape` |
+| Move camera forward | Numpad 8 (`328`, `GLFW_KEY_KP_8`) | `camera.forward` |
+| Move camera back | Numpad 5 (`325`, `GLFW_KEY_KP_5`) | `camera.back` |
+| Move camera left | Numpad 4 (`324`, `GLFW_KEY_KP_4`) | `camera.left` |
+| Move camera right | Numpad 6 (`326`, `GLFW_KEY_KP_6`) | `camera.right` |
+| Move camera up | E (`69`, `GLFW_KEY_E`) | `camera.up` |
+| Move camera down | Q (`81`, `GLFW_KEY_Q`) | `camera.down` |
+| Fast move (4×) | Left Shift (`340`, `GLFW_KEY_LEFT_SHIFT`) | `camera.fast` |
+| Capture cursor for look | Right mouse (`1001`) | `camera.capture` |
+| Capture cursor for look | Middle mouse (`1002`) | `camera.lookMB` |
+| Yaw camera left | Numpad 7 (`327`, `GLFW_KEY_KP_7`) | `camera.yawLeft` |
+| Yaw camera right | Numpad 9 (`329`, `GLFW_KEY_KP_9`) | `camera.yawRight` |
+| Pitch camera up | Numpad 3 (`323`, `GLFW_KEY_KP_3`) | `camera.pitchUp` |
+| Pitch camera down | Numpad 1 (`321`, `GLFW_KEY_KP_1`) | `camera.pitchDown` |
+| Reset camera | Numpad 2 (`322`, `GLFW_KEY_KP_2`) | `camera.reset` |
+| Radial tool menu | Tab (`258`, `GLFW_KEY_TAB`) | `tool.radial` |
+| Release cursor / cancel | Esc (`256`, `GLFW_KEY_ESCAPE`) | `tool.cancel` |
+| Undo | Z (`90`, `GLFW_KEY_Z`) | `edit.undo` |
+| Redo | Y (`89`, `GLFW_KEY_Y`) | `edit.redo` |
+| Delete selected instance | Delete (`261`, `GLFW_KEY_DELETE`) | `edit.delete` |
+| Save to `Save/map.json` | F5 (`294`, `GLFW_KEY_F5`) | `save.quick` |
+| Toggle GAT overlay | F4 (`293`, `GLFW_KEY_F4`) | `view.toggleGat` |
+| Toggle texture-layer overlay | L (`76`, `GLFW_KEY_L`) | `view.toggleLandscape` |
 
 ### Transform (Blender-inspired)
+
+These are separate from `shortcuts.json` and are handled by the Transform tool.
 
 | Key | Action |
 | --- | --- |
@@ -231,6 +245,7 @@ Delete `bin/imgui.ini` or use **View → Reset layout**. The default layout is b
 | Shift (held) | Precise mode — 1/4 speed |
 | Enter or LMB | Confirm and push a single undo command |
 | Esc or RMB | Cancel and restore original transform |
+
 
 ## Known gaps / next steps
 

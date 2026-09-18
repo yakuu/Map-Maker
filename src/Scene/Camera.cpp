@@ -28,7 +28,10 @@ void Camera::update(GLFWwindow* window, float dt, bool captured,
                     bool fwdDown, bool backDown,
                     bool leftDown, bool rightDown,
                     bool upDown, bool downDown,
+                    bool yawLeftDown, bool yawRightDown,
+                    bool pitchUpDown, bool pitchDownDown,
                     bool fast) {
+    // ---- Mouse-look while the cursor is captured ----
     if (captured) {
         double mx, my;
         glfwGetCursorPos(window, &mx, &my);
@@ -45,6 +48,15 @@ void Camera::update(GLFWwindow* window, float dt, bool captured,
         pitch = glm::clamp(pitch, -89.0f, 89.0f);
     }
 
+    // ---- Keyboard look (numpad 7/9 yaw, 1/3 pitch) ----
+    float rot = rotationSpeed * dt;
+    if (yawLeftDown)   yaw   -= rot;
+    if (yawRightDown)  yaw   += rot;
+    if (pitchUpDown)   pitch += rot;
+    if (pitchDownDown) pitch -= rot;
+    pitch = glm::clamp(pitch, -89.0f, 89.0f);
+
+    // ---- Movement ----
     glm::vec3 dir(0.0f);
     glm::vec3 f = forward();
     glm::vec3 r = right();
@@ -58,6 +70,12 @@ void Camera::update(GLFWwindow* window, float dt, bool captured,
 
     if (glm::length(dir) > 0.0001f)
         position += glm::normalize(dir) * speed * (fast ? 4.0f : 1.0f) * dt;
+}
+
+void Camera::reset() {
+    position = defaultPosition;
+    yaw      = defaultYaw;
+    pitch    = defaultPitch;
 }
 
 void Camera::focusOn(const glm::vec3& target, float distance) {

@@ -61,12 +61,28 @@ public:
     bool  contentFolderModalOpen = false;
     char  contentFolder[512] = "Assets";
 
-    // Metadata for a placed / dragged asset
-    size_t pendingDragHash = 0;
+    // Selection outline + transform gizmo
+    bool      outlineEnabled = true;
+    float     outlineThickness = 0.06f;
+    glm::vec4 outlineColor{ 0.25f, 0.75f, 1.0f, 1.0f };
+
+    // Published each frame by TransformTool so the viewport overlay can read it.
+    bool      transformActive = false;
+    int       transformOp = 0;      // 0 none, 1 grab, 2 rotate, 3 scale
+    int       transformAxis = 0;    // 0 none, 1 X, 2 Y, 3 Z
+    glm::vec3 transformOrigin{ 0 };
+
+    // Snapping configuration (used by the transform tool while Ctrl is held)
+    float gridSnapTranslate = 0.5f;   // world units
+    float gridSnapRotate    = 15.0f;  // degrees
+    float gridSnapScale     = 0.1f;   // multiplier step
 
     void pushToast(const std::string& msg, ToastLevel lvl = ToastLevel::Info) {
         toasts.push(msg, lvl);
     }
+
+    // Rebuild the model matrix for an instance (shared by scene + outline paths).
+    static glm::mat4 modelMatrix(const Instance& i);
 
 private:
     void frame(float dt);
@@ -75,6 +91,7 @@ private:
     void drawViewportWindow();
     void drawGatOverlayInViewport();
     void drawTextureOverlayInViewport();
+    void drawGizmoInViewport();
     void drawDockHost();
     void drawMenuBar();
     void drawImportModal();
@@ -85,6 +102,8 @@ private:
     void preloadAssets();
     void trySave();
     void tryLoad();
+    void focusSelected();
+    void duplicateSelected();
 
     bool viewportHoveredForCamera() const;
 

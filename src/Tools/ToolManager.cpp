@@ -23,7 +23,7 @@ public:
     const char* name() const override { return "Select"; }
     const char* description() const override { return "Click an instance to select it."; }
     const char* statusHint() const override {
-        return "LMB: pick   |   G/R/S: transform selected   |   X/Y/Z: constrain axis";
+        return "LMB pick   |   G/R/S transform   |   F focus   |   Ctrl+D duplicate";
     }
 
     void onMouseDown(Application& app, int button, float mx, float my) override {
@@ -42,8 +42,10 @@ public:
                 ImGui::DragFloat3("Scale",    &i->scale.x, 0.01f, 0.001f, 100.0f);
                 ImGui::ColorEdit4("Tint", &i->tint.x);
                 ImGui::Separator();
-                ImGui::TextDisabled("G grab  R rotate  S scale  (X/Y/Z constrain)");
-                ImGui::TextDisabled("Shift = precise   LMB confirm   Esc/RMB cancel");
+                ImGui::TextDisabled("G grab   R rotate   S scale");
+                ImGui::TextDisabled("X / Y / Z constrain   |   Ctrl = snap");
+                ImGui::TextDisabled("Shift = precise (1/4 speed)");
+                ImGui::TextDisabled("LMB/Enter confirm   Esc/RMB cancel");
             } else {
                 app.selectedInstance = -1;
             }
@@ -81,7 +83,14 @@ private:
 };
 
 /* =====================================================================
-   Transform Tool  (Blender-style G / R / S + X/Y/Z + Shift)
+   Transform Tool  (Blender-style G / R / S + X/Y/Z + Shift/Ctrl)
+
+   Design notes on snapping:
+     - Default = free movement derived from raw mouse delta.
+     - Ctrl held = snap the RESULT to the grid, not the delta.
+     - Releasing Ctrl immediately returns to free movement.
+     - The grid is defined by Application::gridSnap* which the Scene panel
+       exposes as sliders.
    ===================================================================== */
 
 class TransformTool : public ITool {
@@ -95,7 +104,8 @@ public:
     }
     const char* statusHint() const override {
         if (op == Op::None)
-            return "Click to select, then G / R / S   |   X/Y/Z axis   |   Shift precise";
+            return "Select an object, then G / R / S   |   X/Y/Z axis   |   Ctrl snap   |   Shift precise";
+
         const char* opName = (op == Op::Grab)   ? "GRAB"
                           : (op == Op::Rotate) ? "ROTATE"
                                                : "SCALE";
@@ -103,11 +113,11 @@ public:
                           : (axis == Axis::Y) ? "Y"
                           : (axis == Axis::Z) ? "Z"
                                               : "-";
-        char* buf = activeHint;
-        std::snprintf(buf, sizeof(activeHint),
-                      "%s [%s]   LMB/Enter confirm   Esc/RMB cancel",
-                      opName, axName);
-        return buf;
+        std::snprintf(activeHint, sizeof(activeHint),
+                      "%s [%s]   %s   LMB/Enter confirm   Esc/RMB cancel",
+                      opName, axName,
+                      snapActive ? "SNAP" : "free");
+        return activeHint;
     }
 
     void onUpdate(Application& app, float dt) override;
@@ -118,8 +128,9 @@ public:
         ImGui::BulletText("S  scale");
         ImGui::Separator();
         ImGui::TextDisabled("X / Y / Z   constrain axis");
+        ImGui::TextDisabled("Ctrl        snap to grid");
         ImGui::TextDisabled("Shift       precise (1/4 speed)");
-        ImGui::TextDisabled("LMB / Enter confirm");
+        ImGui::TextDisabled("LMB/Enter   confirm");
         ImGui::TextDisabled("Esc / RMB   cancel");
     }
 
@@ -127,6 +138,7 @@ private:
     Op    op   = Op::None;
     Axis  axis = Axis::None;
     int   targetId = -1;
+    bool  snapActive = false;
 
     glm::vec3 snapshotPos{0};
     glm::vec3 snapshotRot{0};
@@ -139,10 +151,10 @@ private:
     bool edgeX = false, edgeY = false, edgeZ = false;
     bool edgeEnter = false, edgeEsc = false, edgeLMB = false, edgeRMB = false;
 
-    mutable char activeHint[128] = {0};
+    mutable char activeHint[160] = {0};
 
     void begin(Application& app, Op newOp);
-    void applyDelta(Application& app, const glm::vec2& dm, float mul);
+    void applyDelta(Application& app, glm::vec2 dm, float mul, bool snap);
     void commit(Application& app);
     void cancel(Application& app);
 };
@@ -155,6 +167,7 @@ void TransformTool::begin(Application& app, Op newOp) {
     op = newOp;
     axis = Axis::None;
     targetId = inst->id;
+    snapActive = false;
 
     snapshotPos   = inst->position;
     snapshotRot   = inst->rotation;
@@ -164,50 +177,92 @@ void TransformTool::begin(Application& app, Op newOp) {
     startMouse = { m.x, m.y };
     startMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
 
-    app.tools.transformActive = true;
+    app.transformActive = true;
 }
 
-void TransformTool::applyDelta(Application& app, const glm::vec2& dm, float mul) {
+void TransformTool::applyDelta(Application& app, glm::vec2 dm, float mul, bool snap) {
     Instance* inst = app.scene.find(targetId);
     if (!inst) return;
+
+    snapActive = snap;
 
     switch (op) {
         case Op::Grab: {
             float speed = 0.02f * mul;
             glm::vec3 right = app.camera.right();
-            glm::vec3 fwd   = app.camera.forward();
             glm::vec3 up    = glm::vec3(0, 1, 0);
-            glm::vec3 move(0.0f);
-            if (axis == Axis::X)      move = glm::vec3(dm.x * speed, 0, 0);
-            else if (axis == Axis::Y) move = glm::vec3(0, -dm.y * speed, 0);
-            else if (axis == Axis::Z) move = glm::vec3(0, 0, dm.x * speed);
+
+            glm::vec3 delta(0.0f);
+            if (axis == Axis::X)      delta.x = dm.x * speed;
+            else if (axis == Axis::Y) delta.y = -dm.y * speed;
+            else if (axis == Axis::Z) delta.z = dm.x * speed;
             else {
-                move += right * (dm.x * speed);
-                move += up    * (-dm.y * speed);
+                delta += right * (dm.x * speed);
+                delta += up    * (-dm.y * speed);
             }
-            inst->position = snapshotPos + move;
+
+            glm::vec3 newPos = snapshotPos + delta;
+
+            if (snap) {
+                float g = app.gridSnapTranslate;
+                newPos = glm::round(newPos / g) * g;
+                // Re-apply axis constraint after snapping so the other
+                // components stay at their snapshot values.
+                if (axis == Axis::X) { newPos.y = snapshotPos.y; newPos.z = snapshotPos.z; }
+                if (axis == Axis::Y) { newPos.x = snapshotPos.x; newPos.z = snapshotPos.z; }
+                if (axis == Axis::Z) { newPos.x = snapshotPos.x; newPos.y = snapshotPos.y; }
+            } else if (axis != Axis::None) {
+                if (axis == Axis::X) { newPos.y = snapshotPos.y; newPos.z = snapshotPos.z; }
+                if (axis == Axis::Y) { newPos.x = snapshotPos.x; newPos.z = snapshotPos.z; }
+                if (axis == Axis::Z) { newPos.x = snapshotPos.x; newPos.y = snapshotPos.y; }
+            }
+
+            inst->position = newPos;
+            app.transformOrigin = newPos;
         } break;
 
         case Op::Rotate: {
             float speed = 0.5f * mul;
             glm::vec3 rot = snapshotRot;
-            if (axis == Axis::X)      rot.x = snapshotRot.x + dm.x * speed;
-            else if (axis == Axis::Y) rot.y = snapshotRot.y + dm.x * speed;
-            else if (axis == Axis::Z) rot.z = snapshotRot.z + dm.x * speed;
-            else                      rot.y = snapshotRot.y + dm.x * speed;
+            float d = dm.x * speed;
+
+            if (axis == Axis::X)      rot.x = snapshotRot.x + d;
+            else if (axis == Axis::Y) rot.y = snapshotRot.y + d;
+            else if (axis == Axis::Z) rot.z = snapshotRot.z + d;
+            else                      rot.y = snapshotRot.y + d;
+
+            if (snap) {
+                float g = app.gridSnapRotate;
+                rot.x = std::round(rot.x / g) * g;
+                rot.y = std::round(rot.y / g) * g;
+                rot.z = std::round(rot.z / g) * g;
+            }
             inst->rotation = rot;
+            app.transformOrigin = inst->position;
         } break;
 
         case Op::Scale: {
             float speed = 0.01f * mul;
             float factor = 1.0f + dm.x * speed;
             if (factor < 0.01f) factor = 0.01f;
+
             glm::vec3 s = snapshotScale;
             if (axis == Axis::X)      s.x = snapshotScale.x * factor;
             else if (axis == Axis::Y) s.y = snapshotScale.y * factor;
             else if (axis == Axis::Z) s.z = snapshotScale.z * factor;
             else                      s   = snapshotScale * factor;
+
+            if (snap) {
+                float g = app.gridSnapScale;
+                s.x = std::round(s.x / g) * g;
+                s.y = std::round(s.y / g) * g;
+                s.z = std::round(s.z / g) * g;
+                s.x = std::max(s.x, g);
+                s.y = std::max(s.y, g);
+                s.z = std::max(s.z, g);
+            }
             inst->scale = s;
+            app.transformOrigin = inst->position;
         } break;
 
         default: break;
@@ -225,7 +280,6 @@ void TransformTool::commit(Application& app) {
 
         Instance after = *inst;
 
-        // We only need the "after" state; push a command that stores both.
         struct Cmd : Command {
             Scene* s; int id; Instance b, a;
             Cmd(Scene* sc, int id, Instance b, Instance a)
@@ -239,7 +293,10 @@ void TransformTool::commit(Application& app) {
     op = Op::None;
     axis = Axis::None;
     targetId = -1;
-    app.tools.transformActive = false;
+    snapActive = false;
+    app.transformActive = false;
+    app.transformOp = 0;
+    app.transformAxis = 0;
 }
 
 void TransformTool::cancel(Application& app) {
@@ -252,12 +309,20 @@ void TransformTool::cancel(Application& app) {
     op = Op::None;
     axis = Axis::None;
     targetId = -1;
-    app.tools.transformActive = false;
+    snapActive = false;
+    app.transformActive = false;
+    app.transformOp = 0;
+    app.transformAxis = 0;
 }
 
 void TransformTool::onUpdate(Application& app, float) {
     GLFWwindow* w = app.window;
     if (!w) return;
+
+    // Publish the visual state to Application so the viewport overlay can
+    // draw the gizmo.
+    app.transformOp   = (op == Op::Grab) ? 1 : (op == Op::Rotate) ? 2 : (op == Op::Scale) ? 3 : 0;
+    app.transformAxis = (axis == Axis::X) ? 1 : (axis == Axis::Y) ? 2 : (axis == Axis::Z) ? 3 : 0;
 
     bool g = glfwGetKey(w, GLFW_KEY_G) == GLFW_PRESS;
     bool r = glfwGetKey(w, GLFW_KEY_R) == GLFW_PRESS;
@@ -272,6 +337,8 @@ void TransformTool::onUpdate(Application& app, float) {
 
     bool shift = glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
               || glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    bool ctrl  = glfwGetKey(w, GLFW_KEY_LEFT_CONTROL)  == GLFW_PRESS
+              || glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
 
     bool eG = g && !edgeG, eR = r && !edgeR, eS = s && !edgeS;
     bool eX = x && !edgeX, eY = y && !edgeY, eZ = z && !edgeZ;
@@ -291,11 +358,9 @@ void TransformTool::onUpdate(Application& app, float) {
         return;
     }
 
-    // Cancel/confirm
     if (eEsc || eRMB) { cancel(app); return; }
     if (eEnter || (eLMB && !startMouseDown)) { commit(app); return; }
 
-    // Axis toggles
     if (eX) axis = (axis == Axis::X) ? Axis::None : Axis::X;
     if (eY) axis = (axis == Axis::Y) ? Axis::None : Axis::Y;
     if (eZ) axis = (axis == Axis::Z) ? Axis::None : Axis::Z;
@@ -303,7 +368,7 @@ void TransformTool::onUpdate(Application& app, float) {
     ImVec2 m = ImGui::GetIO().MousePos;
     glm::vec2 dm(m.x - startMouse.x, m.y - startMouse.y);
     float mul = shift ? 0.25f : 1.0f;
-    applyDelta(app, dm, mul);
+    applyDelta(app, dm, mul, ctrl);
 }
 
 /* =====================================================================
@@ -323,11 +388,10 @@ public:
     const char* name() const override { return "GAT Paint"; }
     const char* description() const override { return "Paint walkability cells."; }
     const char* statusHint() const override {
-        return "LMB paint   |   Right-click tool entry for size   |   Z undo";
+        return "LMB paint   |   Wheel radius   |   Right-click tool entry for quick settings";
     }
 
     bool hasQuickMenu() const override { return true; }
-    int* quickRadiusInt() override { return &radius; }
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("GAT Brush");
         ImGui::SetNextItemWidth(160);
@@ -335,6 +399,12 @@ public:
         int v = (int)value;
         const char* items[] = { "Walkable", "Not Walkable", "Event Walkable" };
         if (ImGui::Combo("Value", &v, items, 3)) value = (GatCell)v;
+    }
+
+    bool onMouseWheel(Application&, float delta) override {
+        radius += (delta > 0 ? 1 : -1);
+        radius = std::clamp(radius, 0, 12);
+        return true;
     }
 
     void onMouseDown(Application& app, int button, float, float) override {
@@ -359,7 +429,7 @@ public:
     }
 
     void onImGui(Application&) override {
-        ImGui::SliderInt("Radius", &radius, 0, 8);
+        ImGui::SliderInt("Radius", &radius, 0, 12);
         int v = (int)value;
         const char* items[] = { "Walkable", "Not Walkable", "Event Walkable" };
         if (ImGui::Combo("Value", &v, items, 3)) value = (GatCell)v;
@@ -396,11 +466,10 @@ public:
     const char* name() const override { return "Landscape"; }
     const char* description() const override { return "Sculpt the heightmap."; }
     const char* statusHint() const override {
-        return "LMB apply   |   Right-click tool entry for size/strength";
+        return "LMB apply   |   Wheel radius   |   Right-click tool entry for mode/strength";
     }
 
     bool hasQuickMenu() const override { return true; }
-    float* quickRadiusFloat() override { return &radius; }
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("Landscape Brush");
         ImGui::SetNextItemWidth(180);
@@ -411,6 +480,12 @@ public:
         const char* items[] = { "Raise", "Lower", "Smooth", "Flatten" };
         ImGui::SetNextItemWidth(180);
         if (ImGui::Combo("Mode", &m, items, 4)) mode = (Mode)m;
+    }
+
+    bool onMouseWheel(Application&, float delta) override {
+        radius += (delta > 0 ? 0.5f : -0.5f);
+        radius = std::clamp(radius, 0.5f, 16.0f);
+        return true;
     }
 
     void onMouseDown(Application&, int button, float, float) override {
@@ -426,7 +501,7 @@ public:
         int m = (int)mode;
         const char* items[] = { "Raise", "Lower", "Smooth", "Flatten" };
         if (ImGui::Combo("Mode", &m, items, 4)) mode = (Mode)m;
-        ImGui::SliderFloat("Radius", &radius, 0.5f, 12.0f, "%.1f cells");
+        ImGui::SliderFloat("Radius", &radius, 0.5f, 16.0f, "%.1f cells");
         ImGui::SliderFloat("Strength", &strength, 0.02f, 1.0f, "%.2f");
     }
 
@@ -493,17 +568,22 @@ public:
     const char* name() const override { return "Texture Paint"; }
     const char* description() const override { return "Assign a texture layer index per cell."; }
     const char* statusHint() const override {
-        return "LMB paint   |   Right-click tool entry for layer/size   |   L overlay";
+        return "LMB paint   |   Wheel radius   |   L toggle overlay";
     }
 
     bool hasQuickMenu() const override { return true; }
-    int* quickRadiusInt() override { return &radius; }
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("Texture Brush");
         ImGui::SetNextItemWidth(160);
         ImGui::SliderInt("Radius", &radius, 0, 8);
         ImGui::SetNextItemWidth(160);
         ImGui::SliderInt("Layer", &layer, 0, 7);
+    }
+
+    bool onMouseWheel(Application&, float delta) override {
+        radius += (delta > 0 ? 1 : -1);
+        radius = std::clamp(radius, 0, 8);
+        return true;
     }
 
     void onMouseDown(Application& app, int button, float, float) override {
@@ -611,14 +691,12 @@ ITool* ToolManager::active() const {
 
 void ToolManager::setActive(int index) {
     if (index < 0 || index >= (int)tools.size()) return;
-    if (activeIdx == index) return;
-    if (auto* t = active()) t->onDeactivate(*reinterpret_cast<Application*>(nullptr));
     activeIdx = index;
 }
 
 void ToolManager::update(Application& app, float dt) {
-    // Always keep the transform tool responsive regardless of which tool is
-    // selected, so G/R/S work as soon as an object is picked.
+    // Update every tool - the Transform tool must respond to G/R/S
+    // regardless of which tool is currently selected.
     for (auto& t : tools) t->onUpdate(app, dt);
 }
 
@@ -721,7 +799,20 @@ void ToolManager::drawStatusBar(Application& app) {
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.07f, 0.09f, 1.0f));
 
     if (ImGui::Begin("##StatusBar", nullptr, flags)) {
-        if (auto* t = active()) {
+        if (app.transformActive) {
+            const char* opName = (app.transformOp == 1) ? "GRAB"
+                              : (app.transformOp == 2) ? "ROTATE"
+                              : (app.transformOp == 3) ? "SCALE"
+                                                       : "TRANSFORM";
+            const char* axName = (app.transformAxis == 1) ? "X"
+                              : (app.transformAxis == 2) ? "Y"
+                              : (app.transformAxis == 3) ? "Z"
+                                                         : "-";
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f),
+                               "  %s [%s]", opName, axName);
+            ImGui::SameLine();
+            ImGui::TextDisabled("| Ctrl snap   Shift precise   LMB/Enter confirm   Esc cancel");
+        } else if (auto* t = active()) {
             ImGui::TextColored(ImVec4(0.62f, 0.85f, 1.0f, 1.0f), "  %s", t->name());
             ImGui::SameLine();
             ImGui::TextDisabled("| %s", t->statusHint());
@@ -729,10 +820,11 @@ void ToolManager::drawStatusBar(Application& app) {
 
         char right[256];
         std::snprintf(right, sizeof(right),
-                      "  Inst %d  |  Draws %d  |  Insts %d  |  Undo %d  Redo %d  ",
+                      "  Inst %d  |  Draws %d  |  Insts %d  |  Sel %d  |  Undo %d  Redo %d  ",
                       (int)app.scene.instances.size(),
                       app.renderer.lastDrawCalls,
                       app.renderer.lastInstanceCount,
+                      app.selectedInstance,
                       (int)app.commands.undoSize(),
                       (int)app.commands.redoSize());
 

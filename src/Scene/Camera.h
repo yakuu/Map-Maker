@@ -13,6 +13,12 @@ public:
     float farP  = 1000.0f;
     float speed = 12.0f;
     float sensitivity = 0.12f;
+    float rotationSpeed = 90.0f;   // degrees per second for keyboard look
+
+    // Reset pose
+    glm::vec3 defaultPosition{ 0.0f, 4.0f, 10.0f };
+    float     defaultYaw   = -90.0f;
+    float     defaultPitch = -20.0f;
 
     glm::vec3 forward() const;
     glm::vec3 right() const;
@@ -23,8 +29,10 @@ public:
                 bool fwdDown, bool backDown,
                 bool leftDown, bool rightDown,
                 bool upDown, bool downDown,
+                bool yawLeftDown, bool yawRightDown,
+                bool pitchUpDown, bool pitchDownDown,
                 bool fast);
 
+    void reset();
     void focusOn(const glm::vec3& target, float distance);
 };
-

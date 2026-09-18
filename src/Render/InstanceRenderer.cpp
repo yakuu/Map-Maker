@@ -44,8 +44,45 @@ void main() {
 }
 )GLSL";
 
+static const char* kOutlineVS = R"GLSL(
+#version 460 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+struct Instance { mat4 model; vec4 tint; };
+layout(std430, binding = 0) readonly buffer InstanceBuf {
+    Instance instances[];
+};
+
+uniform mat4  uViewProj;
+uniform int   uBaseInstance;
+uniform float uThickness;
+
+void main() {
+    Instance I = instances[gl_InstanceID + uBaseInstance];
+    vec4 world = I.model * vec4(aPos, 1.0);
+
+    // Expand outward along world-space normal. Normalize the normal matrix
+    // contribution so scaling does not inflate the outline thickness.
+    mat3 nm = mat3(I.model);
+    vec3 worldNormal = normalize(nm * aNormal);
+
+    world.xyz += worldNormal * uThickness;
+    gl_Position = uViewProj * world;
+}
+)GLSL";
+
+static const char* kOutlineFS = R"GLSL(
+#version 460 core
+uniform vec4 uColor;
+out vec4 FragColor;
+void main() { FragColor = uColor; }
+)GLSL";
+
 bool InstanceRenderer::init() {
     if (!shader.compile(kVS, kFS)) return false;
+    if (!outlineShader.compile(kOutlineVS, kOutlineFS)) return false;
+
     glGenBuffers(1, &ssbo);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
     ssboCapacity = 1024;
@@ -63,6 +100,7 @@ void InstanceRenderer::shutdown() {
     staging.clear();
     if (ssbo) { glDeleteBuffers(1, &ssbo); ssbo = 0; }
     shader.destroy();
+    outlineShader.destroy();
 }
 
 Mesh& InstanceRenderer::ensureMesh(size_t hash, Mesh mesh) {
@@ -136,5 +174,36 @@ void InstanceRenderer::end() {
         lastInstanceCount += (int)vec.size();
     }
 
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
+void InstanceRenderer::drawOutline(size_t meshHash, const glm::mat4& model,
+                                   const glm::vec4& color, float thickness) {
+    Mesh* m = getMesh(meshHash);
+    if (!m || !m->vao) return;
+
+    InstanceGPU inst{ model, color };
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(InstanceGPU), &inst);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+
+    outlineShader.bind();
+    outlineShader.setMat4("uViewProj", vp);
+    outlineShader.setInt("uBaseInstance", 0);
+    outlineShader.setFloat("uThickness", thickness);
+    outlineShader.setVec4("uColor", color);
+
+    // Back-face shell: cull front faces so only the far side of the expanded
+    // copy renders, producing a clean silhouette behind the real mesh.
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+
+    glBindVertexArray(m->vao);
+    glDrawElementsInstanced(GL_TRIANGLES, m->indexCount,
+                            GL_UNSIGNED_INT, nullptr, 1);
+    glBindVertexArray(0);
+
+    glCullFace(GL_BACK);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }

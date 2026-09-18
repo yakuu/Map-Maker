@@ -19,8 +19,6 @@ void glfwErrorCb(int code, const char* desc) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", code, desc);
 }
 
-// March a ray against the heightmap. Returns true and writes a world point
-// to `hitOut` on the first surface crossing. Falls back to the y=0 plane.
 bool raycastGround(Scene& s, glm::vec3 origin, glm::vec3 dir, glm::vec3& hitOut) {
     if (s.heightmap.empty()) {
         if (std::abs(dir.y) > 1e-4f) {
@@ -46,7 +44,6 @@ bool raycastGround(Scene& s, glm::vec3 origin, glm::vec3 dir, glm::vec3& hitOut)
         float diff = p.y - groundY;
 
         if (havePrev && prevDiff > 0.0f && diff <= 0.0f) {
-            // linear interpolation between prev and p for a nicer hit
             float u = prevDiff / (prevDiff - diff + 1e-6f);
             hitOut = glm::mix(prev, p, u);
             return true;
@@ -62,6 +59,16 @@ bool raycastGround(Scene& s, glm::vec3 origin, glm::vec3 dir, glm::vec3& hitOut)
 }
 
 } // namespace
+
+glm::mat4 Application::modelMatrix(const Instance& i) {
+    glm::mat4 m(1.0f);
+    m = glm::translate(m, i.position);
+    m = glm::rotate(m, glm::radians(i.rotation.x), { 1,0,0 });
+    m = glm::rotate(m, glm::radians(i.rotation.y), { 0,1,0 });
+    m = glm::rotate(m, glm::radians(i.rotation.z), { 0,0,1 });
+    m = glm::scale(m, i.scale);
+    return m;
+}
 
 bool Application::init() {
     glfwSetErrorCallback(glfwErrorCb);
@@ -157,15 +164,13 @@ void Application::preloadAssets() {
         return;
     }
 
-    int loaded = 0;
-    int failed = 0;
+    int loaded = 0, failed = 0;
     for (auto& a : assets.entries()) {
         Mesh m;
         std::string err;
         if (AssetImporter::loadMeshInto(a.fullPath, m, err)) {
             a.loaded = true;
-            a.vertexCount = 0;
-            a.indexCount  = (int)m.indexCount;
+            a.indexCount = (int)m.indexCount;
             renderer.setMesh(a.hash, std::move(m));
             loaded++;
         } else {
@@ -201,7 +206,6 @@ void Application::frame(float dt) {
     toasts.update();
     handleGlobalKeys();
 
-    // ---- Camera capture: right mouse OR middle mouse while over viewport ----
     bool wantLook = shortcuts.isDown("camera.capture")
                  || shortcuts.isDown("camera.lookMB");
 
@@ -213,8 +217,7 @@ void Application::frame(float dt) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 
-    // While a Blender-style transform is running, WASD must not move the camera.
-    bool blockCam = tools.transformActive;
+    bool blockCam = transformActive;
     camera.update(window, dt, cursorCaptured,
                   !blockCam && shortcuts.isDown("camera.forward"),
                   !blockCam && shortcuts.isDown("camera.back"),
@@ -222,6 +225,10 @@ void Application::frame(float dt) {
                   !blockCam && shortcuts.isDown("camera.right"),
                   !blockCam && shortcuts.isDown("camera.up"),
                   !blockCam && shortcuts.isDown("camera.down"),
+                  !blockCam && shortcuts.isDown("camera.yawLeft"),
+                  !blockCam && shortcuts.isDown("camera.yawRight"),
+                  !blockCam && shortcuts.isDown("camera.pitchUp"),
+                  !blockCam && shortcuts.isDown("camera.pitchDown"),
                   shortcuts.isDown("camera.fast"));
 
     tools.update(*this, dt);
@@ -326,16 +333,20 @@ void Application::drawScene() {
         renderer.submit(heightmapHash, m, glm::vec4(0.35f, 0.55f, 0.3f, 1.0f));
     }
 
-    for (auto& i : scene.instances) {
-        glm::mat4 m(1.0f);
-        m = glm::translate(m, i.position);
-        m = glm::rotate(m, glm::radians(i.rotation.x), { 1,0,0 });
-        m = glm::rotate(m, glm::radians(i.rotation.y), { 0,1,0 });
-        m = glm::rotate(m, glm::radians(i.rotation.z), { 0,0,1 });
-        m = glm::scale(m, i.scale);
-        renderer.submit(i.meshHash, m, i.tint);
-    }
+    for (auto& i : scene.instances)
+        renderer.submit(i.meshHash, modelMatrix(i), i.tint);
+
     renderer.end();
+
+    if (outlineEnabled && selectedInstance > 0) {
+        if (auto* inst = scene.find(selectedInstance)) {
+            glm::vec4 col = outlineColor;
+            if (transformActive)
+                col = glm::vec4(1.0f, 0.85f, 0.25f, 1.0f);
+            renderer.drawOutline(inst->meshHash, modelMatrix(*inst),
+                                 col, outlineThickness);
+        }
+    }
 
     viewportFbo.unbind();
 }
@@ -346,7 +357,6 @@ void Application::drawUi() {
     drawViewportWindow();
     tools.onImGui(*this);
 
-    // ---- Content browser ------------------------------------------------
     if (ImGui::Begin("Content")) {
         if (ImGui::Button("Load Folder...")) contentFolderModalOpen = true;
         ImGui::SameLine();
@@ -369,7 +379,6 @@ void Application::drawUi() {
                           a.loaded ? "" : "[!] ", a.path.c_str());
 
             if (ImGui::Selectable(label)) {
-                // single click: select, double-click: place at origin
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     if (!a.loaded) {
                         Mesh m; std::string err;
@@ -405,7 +414,6 @@ void Application::drawUi() {
     }
     ImGui::End();
 
-    // ---- Scene ----------------------------------------------------------
     if (ImGui::Begin("Scene")) {
         ImGui::Text("Instances: %d", (int)scene.instances.size());
         ImGui::Text("Draw calls: %d", renderer.lastDrawCalls);
@@ -413,15 +421,42 @@ void Application::drawUi() {
         ImGui::Separator();
         ImGui::Checkbox("Show GAT overlay", &showGatOverlay);
         ImGui::Checkbox("Show texture overlay", &showTextureOverlay);
-        ImGui::Text("GAT: %dx%d cell=%.2f", scene.gatW, scene.gatH, scene.cellSize);
+
         ImGui::Separator();
+        ImGui::TextDisabled("Selection");
+        ImGui::Checkbox("Outline selected", &outlineEnabled);
+        ImGui::SliderFloat("Outline thickness", &outlineThickness, 0.01f, 0.25f, "%.3f");
+        if (selectedInstance > 0) {
+            if (ImGui::Button("Focus (F)")) focusSelected();
+            ImGui::SameLine();
+            if (ImGui::Button("Duplicate (Ctrl+D)")) duplicateSelected();
+            ImGui::SameLine();
+            if (ImGui::Button("Delete")) {
+                scene.removeInstance(selectedInstance);
+                selectedInstance = -1;
+            }
+        } else {
+            ImGui::TextDisabled("Nothing selected.");
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Snapping (hold Ctrl while transforming)");
+        ImGui::SliderFloat("Translate", &gridSnapTranslate, 0.05f, 4.0f, "%.2f u");
+        ImGui::SliderFloat("Rotate",    &gridSnapRotate,    1.0f, 90.0f, "%.0f deg");
+        ImGui::SliderFloat("Scale",     &gridSnapScale,     0.01f, 1.0f, "%.2f");
+
+        ImGui::Separator();
+        if (ImGui::Button("Reset view (Num2)")) {
+            camera.reset();
+            pushToast("View reset");
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Reseed cubes")) { seedScene(); pushToast("Reseeded"); }
         ImGui::SameLine();
         if (ImGui::Button("Clear Undo")) commands.clear();
     }
     ImGui::End();
 
-    // ---- Config ---------------------------------------------------------
     if (ImGui::Begin("Config")) {
         ImGui::TextDisabled("Hot-reload: edit any config/*.json");
         if (ImGui::CollapsingHeader("Render", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -439,14 +474,13 @@ void Application::drawUi() {
         }
         if (ImGui::CollapsingHeader("Shortcuts", ImGuiTreeNodeFlags_DefaultOpen)) {
             for (auto& [name, code] : shortcuts.map()) {
-                ImGui::Text("%-20s  %s", name.c_str(),
+                ImGui::Text("%-22s  %s", name.c_str(),
                             Shortcuts::keyName(code).c_str());
             }
         }
     }
     ImGui::End();
 
-    // ---- Materials ------------------------------------------------------
     if (ImGui::Begin("Materials")) {
         auto& m = config.get("materials");
         if (m.contains("materials")) {
@@ -466,14 +500,12 @@ void Application::drawUi() {
     }
     ImGui::End();
 
-    // ---- Console --------------------------------------------------------
     if (ImGui::Begin("Console")) {
         for (auto& t : toasts.items())
             ImGui::TextWrapped("[%d] %s", (int)t.level, t.message.c_str());
     }
     ImGui::End();
 
-    // ---- Toasts ---------------------------------------------------------
     float y = 40.0f;
     for (auto& t : toasts.items()) {
         ImVec4 col(0.2f, 0.2f, 0.2f, 0.9f);
@@ -574,12 +606,27 @@ void Application::drawMenuBar() {
     if (ImGui::BeginMenu("Edit")) {
         if (ImGui::MenuItem("Undo", "Z", false, commands.canUndo())) commands.undo();
         if (ImGui::MenuItem("Redo", "Y", false, commands.canRedo())) commands.redo();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, selectedInstance > 0))
+            duplicateSelected();
+        if (ImGui::MenuItem("Delete", "Del", false, selectedInstance > 0)) {
+            scene.removeInstance(selectedInstance);
+            selectedInstance = -1;
+        }
         ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu("View")) {
         ImGui::MenuItem("GAT overlay", "F4", &showGatOverlay);
         ImGui::MenuItem("Texture overlay", "L", &showTextureOverlay);
+        ImGui::MenuItem("Selection outline", nullptr, &outlineEnabled);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Focus selection", "F", false, selectedInstance > 0))
+            focusSelected();
+        if (ImGui::MenuItem("Reset view", "Num2")) {
+            camera.reset();
+            pushToast("View reset");
+        }
         if (ImGui::MenuItem("Reset layout")) {
             std::filesystem::remove("imgui.ini");
             dockBuilt = false;
@@ -622,7 +669,6 @@ void Application::drawImportModal() {
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
-
         ImGui::EndPopup();
     }
 }
@@ -668,14 +714,12 @@ void Application::drawViewportWindow() {
     viewportImageMin  = origin;
     viewportImageSize = ImVec2((float)viewportFbo.width(), (float)viewportFbo.height());
 
-    // ---- Drag & drop a mesh from the Content panel into the viewport ----
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_HASH")) {
             if (p->DataSize == sizeof(size_t)) {
                 size_t hash = *(const size_t*)p->Data;
                 AssetEntry* entry = assets.find(hash);
 
-                // make sure it's loaded
                 if (entry && !entry->loaded) {
                     Mesh m; std::string err;
                     if (AssetImporter::loadMeshInto(entry->fullPath, m, err)) {
@@ -685,7 +729,6 @@ void Application::drawViewportWindow() {
                 }
 
                 if (renderer.getMesh(hash)) {
-                    // build a ray from the drop pixel
                     ImVec2 mouse = ImGui::GetIO().MousePos;
                     float vpW = viewportImageSize.x;
                     float vpH = viewportImageSize.y;
@@ -719,6 +762,13 @@ void Application::drawViewportWindow() {
 
     bool hovered = ImGui::IsItemHovered();
     ImVec2 mouse = ImGui::GetIO().MousePos;
+
+    if (hovered && !cursorCaptured && !transformActive) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            if (auto* t = tools.active()) t->onMouseWheel(*this, wheel);
+        }
+    }
 
     hoveredGatCell.valid = false;
     hoveredHmVertex.valid = false;
@@ -762,7 +812,7 @@ void Application::drawViewportWindow() {
         }
     }
 
-    if (hovered && !cursorCaptured && !tools.transformActive) {
+    if (hovered && !cursorCaptured && !transformActive) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (auto* t = tools.active()) t->onMouseDown(*this, 0, mouse.x, mouse.y);
         }
@@ -776,9 +826,65 @@ void Application::drawViewportWindow() {
 
     if (showTextureOverlay) drawTextureOverlayInViewport();
     if (showGatOverlay)     drawGatOverlayInViewport();
+    if (selectedInstance > 0) drawGizmoInViewport();
 
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+void Application::drawGizmoInViewport() {
+    Instance* inst = scene.find(selectedInstance);
+    if (!inst) return;
+
+    float vpW = (float)viewportFbo.width();
+    float vpH = (float)viewportFbo.height();
+    if (vpW <= 0 || vpH <= 0) return;
+
+    float aspect = vpW / vpH;
+    glm::mat4 vp = camera.projection(aspect) * camera.view();
+
+    auto project = [&](const glm::vec3& world, ImVec2& out) -> bool {
+        glm::vec4 clip = vp * glm::vec4(world, 1.0f);
+        if (clip.w <= 0.0001f) return false;
+        glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        out.x = viewportImageMin.x + (ndc.x * 0.5f + 0.5f) * vpW;
+        out.y = viewportImageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * vpH;
+        return true;
+    };
+
+    float camDist = glm::length(camera.position - inst->position);
+    float len = std::max(1.5f, camDist * 0.12f);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    struct AxisDraw { glm::vec3 dir; ImU32 col; int id; };
+    AxisDraw axes[3] = {
+        { {1,0,0}, IM_COL32(220, 70, 70, 255), 1 },
+        { {0,1,0}, IM_COL32(80, 220, 80, 255), 2 },
+        { {0,0,1}, IM_COL32(80, 140, 240, 255), 3 },
+    };
+
+    ImVec2 originPx;
+    if (!project(inst->position, originPx)) return;
+
+    for (auto& ax : axes) {
+        ImVec2 endPx;
+        if (!project(inst->position + ax.dir * len, endPx)) continue;
+
+        bool active = transformActive && transformAxis == ax.id;
+        float thick = active ? 4.0f : 2.0f;
+        ImU32 col = ax.col;
+        if (active) {
+            col = (col & 0x00FFFFFF) | (0xFF000000);
+        } else {
+            col = (col & 0x00FFFFFF) | (0xB0000000);
+        }
+
+        dl->AddLine(originPx, endPx, col, thick);
+    }
+
+    dl->AddCircleFilled(originPx, transformActive ? 5.0f : 3.0f,
+                        IM_COL32(255, 255, 255, 220));
 }
 
 void Application::drawGatOverlayInViewport() {
@@ -881,6 +987,25 @@ void Application::drawTextureOverlayInViewport() {
     }
 }
 
+void Application::focusSelected() {
+    if (auto* inst = scene.find(selectedInstance)) {
+        float s = std::max({ inst->scale.x, inst->scale.y, inst->scale.z });
+        float dist = std::max(3.0f, s * 5.0f);
+        camera.focusOn(inst->position, dist);
+        pushToast("Focused instance " + std::to_string(inst->id));
+    }
+}
+
+void Application::duplicateSelected() {
+    if (auto* inst = scene.find(selectedInstance)) {
+        Instance copy = *inst;
+        copy.position += glm::vec3(0.5f, 0.0f, 0.0f);
+        int newId = scene.addInstance(copy);
+        selectedInstance = newId;
+        pushToast("Duplicated instance " + std::to_string(newId));
+    }
+}
+
 void Application::handleGlobalKeys() {
     if (shortcuts.justPressed("edit.undo")) {
         if (commands.undo()) pushToast("Undo");
@@ -906,6 +1031,24 @@ void Application::handleGlobalKeys() {
         cursorCaptured = false;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
+    if (shortcuts.justPressed("camera.reset")) {
+        camera.reset();
+        pushToast("View reset");
+    }
+
+    bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL)  == GLFW_PRESS
+             || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+    static bool prevF = false, prevD = false;
+    bool fNow = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+    bool dNow = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+
+    if (fNow && !prevF && !transformActive && selectedInstance > 0)
+        focusSelected();
+    if (ctrl && dNow && !prevD && !transformActive && selectedInstance > 0)
+        duplicateSelected();
+
+    prevF = fNow;
+    prevD = dNow;
 }
 
 void Application::trySave() {

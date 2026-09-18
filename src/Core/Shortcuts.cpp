@@ -73,6 +73,28 @@ std::string Shortcuts::keyName(int code) {
     static const char* mouse[] = { "MouseL", "MouseR", "MouseM", "Mouse4", "Mouse5" };
     if (code >= kMouseBase && code < kMouseBase + 5) return mouse[code - kMouseBase];
 
+    // Explicit numpad names - glfwGetKeyName returns null for these on Windows.
+    switch (code) {
+        case GLFW_KEY_KP_0:        return "Num0";
+        case GLFW_KEY_KP_1:        return "Num1";
+        case GLFW_KEY_KP_2:        return "Num2";
+        case GLFW_KEY_KP_3:        return "Num3";
+        case GLFW_KEY_KP_4:        return "Num4";
+        case GLFW_KEY_KP_5:        return "Num5";
+        case GLFW_KEY_KP_6:        return "Num6";
+        case GLFW_KEY_KP_7:        return "Num7";
+        case GLFW_KEY_KP_8:        return "Num8";
+        case GLFW_KEY_KP_9:        return "Num9";
+        case GLFW_KEY_KP_DECIMAL:  return "Num.";
+        case GLFW_KEY_KP_DIVIDE:   return "Num/";
+        case GLFW_KEY_KP_MULTIPLY: return "Num*";
+        case GLFW_KEY_KP_SUBTRACT: return "Num-";
+        case GLFW_KEY_KP_ADD:      return "Num+";
+        case GLFW_KEY_KP_ENTER:    return "NumEnter";
+        case GLFW_KEY_KP_EQUAL:    return "Num=";
+        default: break;
+    }
+
     const char* n = glfwGetKeyName(code, 0);
     if (n) return std::string(n);
 

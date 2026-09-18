@@ -22,6 +22,11 @@ public:
     void submit(size_t meshHash, const glm::mat4& model, const glm::vec4& tint);
     void end();
 
+    // Solid silhouette drawn after end(). Renders a slightly expanded back-face
+    // shell of the given mesh at the given transform. Front faces are culled.
+    void drawOutline(size_t meshHash, const glm::mat4& model,
+                     const glm::vec4& color, float thickness);
+
     bool hasMesh(size_t hash) const { return meshes.find(hash) != meshes.end(); }
     Mesh& ensureMesh(size_t hash, Mesh mesh);
     void  setMesh(size_t hash, Mesh mesh);
@@ -32,6 +37,7 @@ public:
 
 private:
     Shader shader;
+    Shader outlineShader;
     GLuint ssbo = 0;
     size_t ssboCapacity = 0;
 
