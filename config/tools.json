@@ -1,0 +1,13 @@
+{
+  "gat": {
+    "radius": 2,
+    "value": 1,
+    "cellSize": 1.0
+  },
+  "landscape": {
+    "brushRadius": 8.0,
+    "strength": 0.5,
+    "falloff": "smooth",
+    "mode": "raise"
+  }
+}

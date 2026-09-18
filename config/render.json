@@ -1,0 +1,6 @@
+{
+  "clearColor": [0.08, 0.09, 0.11, 1.0],
+  "camera": { "fov": 60.0, "near": 0.1, "far": 1000.0, "speed": 12.0 },
+  "ssbo": { "initialCapacity": 1024 },
+  "imgui": { "fontScale": 1.0, "rounding": 3.0 }
+}

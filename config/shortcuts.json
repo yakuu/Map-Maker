@@ -1,0 +1,18 @@
+{
+  "camera.forward": 87,
+  "camera.back": 83,
+  "camera.left": 65,
+  "camera.right": 68,
+  "camera.up": 69,
+  "camera.down": 81,
+  "camera.fast": 340,
+  "camera.capture": 1001,
+  "tool.radial": 258,
+  "tool.cancel": 256,
+  "edit.undo": 90,
+  "edit.redo": 89,
+  "edit.delete": 261,
+  "save.quick": 83,
+  "view.toggleGat": 71,
+  "view.toggleLandscape": 76
+}
