@@ -23,7 +23,7 @@ public:
     const char* name() const override { return "Select"; }
     const char* description() const override { return "Click an instance to select it."; }
     const char* statusHint() const override {
-        return "LMB: pick   |   RMB in viewport: look   |   Z: undo";
+        return "LMB: pick   |   G/R/S: transform selected   |   X/Y/Z: constrain axis";
     }
 
     void onMouseDown(Application& app, int button, float mx, float my) override {
@@ -41,6 +41,9 @@ public:
                 ImGui::DragFloat3("Rotation", &i->rotation.x, 0.5f);
                 ImGui::DragFloat3("Scale",    &i->scale.x, 0.01f, 0.001f, 100.0f);
                 ImGui::ColorEdit4("Tint", &i->tint.x);
+                ImGui::Separator();
+                ImGui::TextDisabled("G grab  R rotate  S scale  (X/Y/Z constrain)");
+                ImGui::TextDisabled("Shift = precise   LMB confirm   Esc/RMB cancel");
             } else {
                 app.selectedInstance = -1;
             }
@@ -78,6 +81,232 @@ private:
 };
 
 /* =====================================================================
+   Transform Tool  (Blender-style G / R / S + X/Y/Z + Shift)
+   ===================================================================== */
+
+class TransformTool : public ITool {
+public:
+    enum class Op   { None, Grab, Rotate, Scale };
+    enum class Axis { None, X, Y, Z };
+
+    const char* name() const override { return "Transform"; }
+    const char* description() const override {
+        return "Blender-style modal transform on the selected instance.";
+    }
+    const char* statusHint() const override {
+        if (op == Op::None)
+            return "Click to select, then G / R / S   |   X/Y/Z axis   |   Shift precise";
+        const char* opName = (op == Op::Grab)   ? "GRAB"
+                          : (op == Op::Rotate) ? "ROTATE"
+                                               : "SCALE";
+        const char* axName = (axis == Axis::X) ? "X"
+                          : (axis == Axis::Y) ? "Y"
+                          : (axis == Axis::Z) ? "Z"
+                                              : "-";
+        char* buf = activeHint;
+        std::snprintf(buf, sizeof(activeHint),
+                      "%s [%s]   LMB/Enter confirm   Esc/RMB cancel",
+                      opName, axName);
+        return buf;
+    }
+
+    void onUpdate(Application& app, float dt) override;
+    void onImGui(Application&) override {
+        ImGui::TextDisabled("Click to select an object, then:");
+        ImGui::BulletText("G  grab (move)");
+        ImGui::BulletText("R  rotate");
+        ImGui::BulletText("S  scale");
+        ImGui::Separator();
+        ImGui::TextDisabled("X / Y / Z   constrain axis");
+        ImGui::TextDisabled("Shift       precise (1/4 speed)");
+        ImGui::TextDisabled("LMB / Enter confirm");
+        ImGui::TextDisabled("Esc / RMB   cancel");
+    }
+
+private:
+    Op    op   = Op::None;
+    Axis  axis = Axis::None;
+    int   targetId = -1;
+
+    glm::vec3 snapshotPos{0};
+    glm::vec3 snapshotRot{0};
+    glm::vec3 snapshotScale{1};
+
+    glm::vec2 startMouse{0,0};
+    bool      startMouseDown = false;
+
+    bool edgeG = false, edgeR = false, edgeS = false;
+    bool edgeX = false, edgeY = false, edgeZ = false;
+    bool edgeEnter = false, edgeEsc = false, edgeLMB = false, edgeRMB = false;
+
+    mutable char activeHint[128] = {0};
+
+    void begin(Application& app, Op newOp);
+    void applyDelta(Application& app, const glm::vec2& dm, float mul);
+    void commit(Application& app);
+    void cancel(Application& app);
+};
+
+void TransformTool::begin(Application& app, Op newOp) {
+    if (app.selectedInstance <= 0) return;
+    Instance* inst = app.scene.find(app.selectedInstance);
+    if (!inst) return;
+
+    op = newOp;
+    axis = Axis::None;
+    targetId = inst->id;
+
+    snapshotPos   = inst->position;
+    snapshotRot   = inst->rotation;
+    snapshotScale = inst->scale;
+
+    ImVec2 m = ImGui::GetIO().MousePos;
+    startMouse = { m.x, m.y };
+    startMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+
+    app.tools.transformActive = true;
+}
+
+void TransformTool::applyDelta(Application& app, const glm::vec2& dm, float mul) {
+    Instance* inst = app.scene.find(targetId);
+    if (!inst) return;
+
+    switch (op) {
+        case Op::Grab: {
+            float speed = 0.02f * mul;
+            glm::vec3 right = app.camera.right();
+            glm::vec3 fwd   = app.camera.forward();
+            glm::vec3 up    = glm::vec3(0, 1, 0);
+            glm::vec3 move(0.0f);
+            if (axis == Axis::X)      move = glm::vec3(dm.x * speed, 0, 0);
+            else if (axis == Axis::Y) move = glm::vec3(0, -dm.y * speed, 0);
+            else if (axis == Axis::Z) move = glm::vec3(0, 0, dm.x * speed);
+            else {
+                move += right * (dm.x * speed);
+                move += up    * (-dm.y * speed);
+            }
+            inst->position = snapshotPos + move;
+        } break;
+
+        case Op::Rotate: {
+            float speed = 0.5f * mul;
+            glm::vec3 rot = snapshotRot;
+            if (axis == Axis::X)      rot.x = snapshotRot.x + dm.x * speed;
+            else if (axis == Axis::Y) rot.y = snapshotRot.y + dm.x * speed;
+            else if (axis == Axis::Z) rot.z = snapshotRot.z + dm.x * speed;
+            else                      rot.y = snapshotRot.y + dm.x * speed;
+            inst->rotation = rot;
+        } break;
+
+        case Op::Scale: {
+            float speed = 0.01f * mul;
+            float factor = 1.0f + dm.x * speed;
+            if (factor < 0.01f) factor = 0.01f;
+            glm::vec3 s = snapshotScale;
+            if (axis == Axis::X)      s.x = snapshotScale.x * factor;
+            else if (axis == Axis::Y) s.y = snapshotScale.y * factor;
+            else if (axis == Axis::Z) s.z = snapshotScale.z * factor;
+            else                      s   = snapshotScale * factor;
+            inst->scale = s;
+        } break;
+
+        default: break;
+    }
+}
+
+void TransformTool::commit(Application& app) {
+    Instance* inst = app.scene.find(targetId);
+    if (inst) {
+        Instance before;
+        before.id = targetId;
+        before.position = snapshotPos;
+        before.rotation = snapshotRot;
+        before.scale    = snapshotScale;
+
+        Instance after = *inst;
+
+        // We only need the "after" state; push a command that stores both.
+        struct Cmd : Command {
+            Scene* s; int id; Instance b, a;
+            Cmd(Scene* sc, int id, Instance b, Instance a)
+                : s(sc), id(id), b(b), a(a) {}
+            void apply() override { if (auto* i = s->find(id)) *i = a; }
+            void revert() override { if (auto* i = s->find(id)) *i = b; }
+            const char* name() const override { return "Transform"; }
+        };
+        app.commands.push(std::make_unique<Cmd>(&app.scene, targetId, before, after));
+    }
+    op = Op::None;
+    axis = Axis::None;
+    targetId = -1;
+    app.tools.transformActive = false;
+}
+
+void TransformTool::cancel(Application& app) {
+    Instance* inst = app.scene.find(targetId);
+    if (inst) {
+        inst->position = snapshotPos;
+        inst->rotation = snapshotRot;
+        inst->scale    = snapshotScale;
+    }
+    op = Op::None;
+    axis = Axis::None;
+    targetId = -1;
+    app.tools.transformActive = false;
+}
+
+void TransformTool::onUpdate(Application& app, float) {
+    GLFWwindow* w = app.window;
+    if (!w) return;
+
+    bool g = glfwGetKey(w, GLFW_KEY_G) == GLFW_PRESS;
+    bool r = glfwGetKey(w, GLFW_KEY_R) == GLFW_PRESS;
+    bool s = glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS;
+    bool x = glfwGetKey(w, GLFW_KEY_X) == GLFW_PRESS;
+    bool y = glfwGetKey(w, GLFW_KEY_Y) == GLFW_PRESS;
+    bool z = glfwGetKey(w, GLFW_KEY_Z) == GLFW_PRESS;
+    bool enter = glfwGetKey(w, GLFW_KEY_ENTER) == GLFW_PRESS;
+    bool esc   = glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    bool lmb   = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    bool rmb   = glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+    bool shift = glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
+              || glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+
+    bool eG = g && !edgeG, eR = r && !edgeR, eS = s && !edgeS;
+    bool eX = x && !edgeX, eY = y && !edgeY, eZ = z && !edgeZ;
+    bool eEnter = enter && !edgeEnter;
+    bool eEsc   = esc && !edgeEsc;
+    bool eLMB   = lmb && !edgeLMB;
+    bool eRMB   = rmb && !edgeRMB;
+    edgeG=g; edgeR=r; edgeS=s; edgeX=x; edgeY=y; edgeZ=z;
+    edgeEnter=enter; edgeEsc=esc; edgeLMB=lmb; edgeRMB=rmb;
+
+    if (op == Op::None) {
+        if (app.selectedInstance <= 0) return;
+        if (ImGui::GetIO().WantTextInput) return;
+        if (eG) begin(app, Op::Grab);
+        else if (eR) begin(app, Op::Rotate);
+        else if (eS) begin(app, Op::Scale);
+        return;
+    }
+
+    // Cancel/confirm
+    if (eEsc || eRMB) { cancel(app); return; }
+    if (eEnter || (eLMB && !startMouseDown)) { commit(app); return; }
+
+    // Axis toggles
+    if (eX) axis = (axis == Axis::X) ? Axis::None : Axis::X;
+    if (eY) axis = (axis == Axis::Y) ? Axis::None : Axis::Y;
+    if (eZ) axis = (axis == Axis::Z) ? Axis::None : Axis::Z;
+
+    ImVec2 m = ImGui::GetIO().MousePos;
+    glm::vec2 dm(m.x - startMouse.x, m.y - startMouse.y);
+    float mul = shift ? 0.25f : 1.0f;
+    applyDelta(app, dm, mul);
+}
+
+/* =====================================================================
    GAT Paint Tool
    ===================================================================== */
 
@@ -94,7 +323,18 @@ public:
     const char* name() const override { return "GAT Paint"; }
     const char* description() const override { return "Paint walkability cells."; }
     const char* statusHint() const override {
-        return "LMB: paint   |   Tool panel: radius & value   |   Z: undo";
+        return "LMB paint   |   Right-click tool entry for size   |   Z undo";
+    }
+
+    bool hasQuickMenu() const override { return true; }
+    int* quickRadiusInt() override { return &radius; }
+    void drawQuickMenu(Application&) override {
+        ImGui::TextDisabled("GAT Brush");
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt("Radius", &radius, 0, 12);
+        int v = (int)value;
+        const char* items[] = { "Walkable", "Not Walkable", "Event Walkable" };
+        if (ImGui::Combo("Value", &v, items, 3)) value = (GatCell)v;
     }
 
     void onMouseDown(Application& app, int button, float, float) override {
@@ -128,15 +368,15 @@ public:
 private:
     void paintAt(int cx, int cy) {
         if (!app_scene) return;
-        for (int y = cy - radius; y <= cy + radius; ++y) {
-            for (int x = cx - radius; x <= cx + radius; ++x) {
-                if (!app_scene->inBounds(x, y)) continue;
-                int dx = x - cx, dy = y - cy;
+        for (int yy = cy - radius; yy <= cy + radius; ++yy) {
+            for (int xx = cx - radius; xx <= cx + radius; ++xx) {
+                if (!app_scene->inBounds(xx, yy)) continue;
+                int dx = xx - cx, dy = yy - cy;
                 if (dx * dx + dy * dy > radius * radius) continue;
-                GatCell before = app_scene->at(x, y);
+                GatCell before = app_scene->at(xx, yy);
                 if (before == value) continue;
-                app_scene->at(x, y) = value;
-                stroke.push_back({ x, y, before, value });
+                app_scene->at(xx, yy) = value;
+                stroke.push_back({ xx, yy, before, value });
             }
         }
     }
@@ -149,14 +389,28 @@ private:
 class LandscapeTool : public ITool {
 public:
     enum class Mode { Raise, Lower, Smooth, Flatten };
-    Mode mode = Mode::Raise;
+    Mode  mode = Mode::Raise;
     float radius = 3.0f;
     float strength = 0.35f;
 
     const char* name() const override { return "Landscape"; }
     const char* description() const override { return "Sculpt the heightmap."; }
     const char* statusHint() const override {
-        return "LMB: apply   |   Tool panel: mode, radius, strength";
+        return "LMB apply   |   Right-click tool entry for size/strength";
+    }
+
+    bool hasQuickMenu() const override { return true; }
+    float* quickRadiusFloat() override { return &radius; }
+    void drawQuickMenu(Application&) override {
+        ImGui::TextDisabled("Landscape Brush");
+        ImGui::SetNextItemWidth(180);
+        ImGui::SliderFloat("Radius", &radius, 0.5f, 16.0f, "%.1f");
+        ImGui::SetNextItemWidth(180);
+        ImGui::SliderFloat("Strength", &strength, 0.02f, 1.0f, "%.2f");
+        int m = (int)mode;
+        const char* items[] = { "Raise", "Lower", "Smooth", "Flatten" };
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::Combo("Mode", &m, items, 4)) mode = (Mode)m;
     }
 
     void onMouseDown(Application&, int button, float, float) override {
@@ -239,7 +493,17 @@ public:
     const char* name() const override { return "Texture Paint"; }
     const char* description() const override { return "Assign a texture layer index per cell."; }
     const char* statusHint() const override {
-        return "LMB: paint   |   Tool panel: layer index & radius   |   L: toggle overlay";
+        return "LMB paint   |   Right-click tool entry for layer/size   |   L overlay";
+    }
+
+    bool hasQuickMenu() const override { return true; }
+    int* quickRadiusInt() override { return &radius; }
+    void drawQuickMenu(Application&) override {
+        ImGui::TextDisabled("Texture Brush");
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt("Radius", &radius, 0, 8);
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt("Layer", &layer, 0, 7);
     }
 
     void onMouseDown(Application& app, int button, float, float) override {
@@ -283,7 +547,7 @@ public:
     const char* name() const override { return "Import Asset"; }
     const char* description() const override { return "Load an .obj/.fbx/.gltf and place it."; }
     const char* statusHint() const override {
-        return "Edit path, press Load  |   Or File menu -> Import Asset...";
+        return "Edit path, press Load   |   Or drag from the Content panel";
     }
 
     void onImGui(Application& app) override {
@@ -305,7 +569,7 @@ public:
             app.pushToast("Import failed: " + err, ToastLevel::Error);
             return false;
         }
-        size_t hash = std::hash<std::string>{}(p);
+        size_t hash = AssetRegistry::hashPath(p);
         app.renderer.setMesh(hash, std::move(m));
 
         Instance inst;
@@ -324,6 +588,7 @@ public:
 
 void ToolManager::init(Application& app) {
     addTool(std::make_unique<SelectTool>());
+    addTool(std::make_unique<TransformTool>());
 
     auto gat = std::make_unique<GATPaintTool>();
     gat->app_scene = &app.scene;
@@ -346,18 +611,31 @@ ITool* ToolManager::active() const {
 
 void ToolManager::setActive(int index) {
     if (index < 0 || index >= (int)tools.size()) return;
+    if (activeIdx == index) return;
+    if (auto* t = active()) t->onDeactivate(*reinterpret_cast<Application*>(nullptr));
     activeIdx = index;
 }
 
 void ToolManager::update(Application& app, float dt) {
-    if (auto* t = active()) t->onUpdate(app, dt);
+    // Always keep the transform tool responsive regardless of which tool is
+    // selected, so G/R/S work as soon as an object is picked.
+    for (auto& t : tools) t->onUpdate(app, dt);
 }
 
 void ToolManager::onImGui(Application& app) {
     if (ImGui::Begin("Tools")) {
         for (int i = 0; i < (int)tools.size(); ++i) {
             bool sel = (i == activeIdx);
+            ImGui::PushID(i);
             if (ImGui::Selectable(tools[i]->name(), sel)) setActive(i);
+
+            if (tools[i]->hasQuickMenu()) {
+                if (ImGui::BeginPopupContextItem("quick")) {
+                    tools[i]->drawQuickMenu(app);
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::PopID();
         }
         ImGui::Separator();
         if (auto* t = active()) {

@@ -27,3 +27,4 @@ public:
 
     void focusOn(const glm::vec3& target, float distance);
 };
+

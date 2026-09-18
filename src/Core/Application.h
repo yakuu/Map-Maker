@@ -8,6 +8,7 @@
 #include "Render/InstanceRenderer.h"
 #include "Render/Framebuffer.h"
 #include "Render/Mesh.h"
+#include "Render/AssetRegistry.h"
 #include "Tools/ToolManager.h"
 
 #include <glm/glm.hpp>
@@ -33,6 +34,7 @@ public:
     Framebuffer viewportFbo;
     CommandStack commands;
     ToolManager tools;
+    AssetRegistry assets;
 
     int viewportW = 1600, viewportH = 900;
     bool cursorCaptured = false;
@@ -41,7 +43,6 @@ public:
     int selectedInstance = -1;
     size_t cubeHash = 0;
 
-    // Real on-screen rect of the viewport image (set every frame in drawViewportWindow)
     ImVec2 viewportImageMin{ 0, 0 };
     ImVec2 viewportImageSize{ 0, 0 };
 
@@ -57,6 +58,12 @@ public:
     bool importModalOpen = false;
     char importPath[512] = "Assets/model.obj";
 
+    bool  contentFolderModalOpen = false;
+    char  contentFolder[512] = "Assets";
+
+    // Metadata for a placed / dragged asset
+    size_t pendingDragHash = 0;
+
     void pushToast(const std::string& msg, ToastLevel lvl = ToastLevel::Info) {
         toasts.push(msg, lvl);
     }
@@ -71,9 +78,11 @@ private:
     void drawDockHost();
     void drawMenuBar();
     void drawImportModal();
+    void drawContentFolderModal();
     void handleGlobalKeys();
     void seedScene();
     void rebuildHeightmapMesh();
+    void preloadAssets();
     void trySave();
     void tryLoad();
 

@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions
 
-:: ---- Map-Maker build & run launcher ----
+:: ---- Map-Maker build & run launcher (FAST / incremental) ----
+:: Run from the Map-Maker folder. Dependencies are NOT reinstalled or rebuilt.
 
 cd /d "%~dp0" || goto :err
 
@@ -15,21 +16,19 @@ if not exist "vcpkg.json" (
 set "VCPKG_ROOT=C:\vcpkg"
 set "CMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake"
 set "CMAKE_BUILD_PARALLEL_LEVEL=%NUMBER_OF_PROCESSORS%"
-set "CMAKE_GENERATOR_PLATFORM=x64"
 set "UseMultiToolTask=true"
 set "EnforceProcessCountAcrossBuilds=true"
-
-:: ---- Force v143 toolset (critical) ----
 set "VCPKG_PLATFORM_TOOLSET=v143"
-
-:: ---- Point vcpkg at the overlay triplet folder (env var, not cache var!) ----
 set "VCPKG_OVERLAY_TRIPLETS=%CD%\triplets"
 set "VCPKG_TARGET_TRIPLET=x64-windows-static-v143"
 
-:: Skip any prebuilt binary cache so we get a clean v143 build
-set "VCPKG_BINARY_SOURCES=clear"
+:: FIX: Correct syntax for binary sources. Use 'files' to enable local caching.
+set "VCPKG_BINARY_SOURCES=files,C:\Users\Administrator\AppData\Local\vcpkg\archives"
 
-:: ---- Ensure the triplet file exists ----
+echo [INFO] Triplet   = %VCPKG_TARGET_TRIPLET%
+echo [INFO] Parallel  = %CMAKE_BUILD_PARALLEL_LEVEL% jobs
+
+:: ---- Ensure the triplet file exists (only needed once) ----
 if not exist "triplets" mkdir "triplets"
 if not exist "triplets\x64-windows-static-v143.cmake" (
     echo [INFO] Writing triplets\x64-windows-static-v143.cmake
@@ -41,38 +40,22 @@ if not exist "triplets\x64-windows-static-v143.cmake" (
     )
 )
 
-echo [INFO] VCPKG_ROOT          = %VCPKG_ROOT%
-echo [INFO] Triplet             = %VCPKG_TARGET_TRIPLET%
-echo [INFO] Overlay triplets    = %VCPKG_OVERLAY_TRIPLETS%
-echo [INFO] Platform toolset    = %VCPKG_PLATFORM_TOOLSET%
-echo [INFO] Parallel            = %CMAKE_BUILD_PARALLEL_LEVEL% jobs
-
-:: ---- Clean stale artifacts ----
-if exist "build"           rmdir /s /q "build"
-if exist "vcpkg_installed" rmdir /s /q "vcpkg_installed"
-if exist "bin\Release"     rmdir /s /q "bin\Release"
-if exist "bin\Debug"       rmdir /s /q "bin\Debug"
-
-:: ---- Configure ----
-cmake --preset default ^
-  -DVCPKG_MANIFEST_MODE=ON ^
-  -DVCPKG_OVERLAY_TRIPLETS="%VCPKG_OVERLAY_TRIPLETS%" ^
-  -DVCPKG_TARGET_TRIPLET=%VCPKG_TARGET_TRIPLET% ^
-  -DVCPKG_PLATFORM_TOOLSET=v143 ^
-  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
-  -DCMAKE_EXE_LINKER_FLAGS="/OPT:REF /OPT:ICF /INCREMENTAL:NO" || goto :err
-
-:: ---- Confirm vcpkg produced the right toolset ----
-echo.
-echo [CHECK] Looking for the freshly built assimp library...
-for %%F in ("vcpkg_installed\x64-windows-static-v143\lib\assimp-*.lib") do (
-    echo        %%F
+:: ---- First-run only: full configure + dependency build ----
+if not exist "build\CMakeCache.txt" (
+    echo [INFO] No cached configure found - running FULL setup ^(this is the slow one^).
+    cmake --preset default ^
+      -DVCPKG_MANIFEST_MODE=ON ^
+      -DVCPKG_OVERLAY_TRIPLETS="%VCPKG_OVERLAY_TRIPLETS%" ^
+      -DVCPKG_TARGET_TRIPLET=%VCPKG_TARGET_TRIPLET% ^
+      -DVCPKG_PLATFORM_TOOLSET=v143 ^
+      -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON ^
+      -DCMAKE_EXE_LINKER_FLAGS="/OPT:REF /OPT:ICF /INCREMENTAL:NO" || goto :err
+) else (
+    echo [INFO] Cache detected - skipping vcpkg install, reusing vcpkg_installed\.
 )
-echo        ^(must contain "vc143" -- if it says vc144 or vc145, stop and tell me^)
-echo.
 
-:: ---- Build ----
-cmake --build --preset release --config Release --parallel %NUMBER_OF_PROCESSORS% || goto :err
+:: ---- Build ONLY the project target (no port rebuilds, no clean) ----
+cmake --build --preset release --config Release --target MapMaker --parallel %NUMBER_OF_PROCESSORS% || goto :err
 
 :: ---- Locate and launch ----
 set "EXE="

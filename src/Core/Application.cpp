@@ -18,7 +18,50 @@ namespace {
 void glfwErrorCb(int code, const char* desc) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", code, desc);
 }
+
+// March a ray against the heightmap. Returns true and writes a world point
+// to `hitOut` on the first surface crossing. Falls back to the y=0 plane.
+bool raycastGround(Scene& s, glm::vec3 origin, glm::vec3 dir, glm::vec3& hitOut) {
+    if (s.heightmap.empty()) {
+        if (std::abs(dir.y) > 1e-4f) {
+            float t = -origin.y / dir.y;
+            if (t > 0) { hitOut = origin + dir * t; return true; }
+        }
+        return false;
+    }
+
+    glm::vec3 prev(0);
+    float prevDiff = 0.0f;
+    bool  havePrev = false;
+
+    for (float t = 0.0f; t < 500.0f; t += 0.25f) {
+        glm::vec3 p = origin + dir * t;
+        float hx = (p.x - s.hmOrigin.x) / s.hmCell;
+        float hy = (p.z - s.hmOrigin.z) / s.hmCell;
+        int ix = (int)std::round(hx);
+        int iy = (int)std::round(hy);
+        if (!s.hmInBounds(ix, iy)) continue;
+
+        float groundY = s.hmAt(ix, iy);
+        float diff = p.y - groundY;
+
+        if (havePrev && prevDiff > 0.0f && diff <= 0.0f) {
+            // linear interpolation between prev and p for a nicer hit
+            float u = prevDiff / (prevDiff - diff + 1e-6f);
+            hitOut = glm::mix(prev, p, u);
+            return true;
+        }
+        prev = p; prevDiff = diff; havePrev = true;
+    }
+
+    if (std::abs(dir.y) > 1e-4f) {
+        float t = -origin.y / dir.y;
+        if (t > 0) { hitOut = origin + dir * t; return true; }
+    }
+    return false;
 }
+
+} // namespace
 
 bool Application::init() {
     glfwSetErrorCallback(glfwErrorCb);
@@ -80,6 +123,7 @@ bool Application::init() {
     scene.initGat(64, 64);
     scene.initHeightmap(33, 33);
     seedScene();
+    preloadAssets();
 
     tools.init(*this);
 
@@ -106,6 +150,35 @@ void Application::seedScene() {
     }
 }
 
+void Application::preloadAssets() {
+    int found = assets.scan("Assets");
+    if (found <= 0) {
+        pushToast("Assets/ empty or missing - drop models there", ToastLevel::Warning);
+        return;
+    }
+
+    int loaded = 0;
+    int failed = 0;
+    for (auto& a : assets.entries()) {
+        Mesh m;
+        std::string err;
+        if (AssetImporter::loadMeshInto(a.fullPath, m, err)) {
+            a.loaded = true;
+            a.vertexCount = 0;
+            a.indexCount  = (int)m.indexCount;
+            renderer.setMesh(a.hash, std::move(m));
+            loaded++;
+        } else {
+            failed++;
+            std::fprintf(stderr, "[assets] failed %s: %s\n",
+                         a.fullPath.c_str(), err.c_str());
+        }
+    }
+    pushToast("Preloaded " + std::to_string(loaded) + " asset(s)");
+    if (failed > 0)
+        pushToast(std::to_string(failed) + " asset(s) failed", ToastLevel::Warning);
+}
+
 void Application::run() {
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -128,26 +201,27 @@ void Application::frame(float dt) {
     toasts.update();
     handleGlobalKeys();
 
-    bool captured = cursorCaptured;
-    if (captured) {
-        if (shortcuts.justReleased("camera.capture")) {
-            cursorCaptured = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
-    } else {
-        if (shortcuts.justPressed("camera.capture") && viewportHoveredForCamera()) {
-            cursorCaptured = true;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        }
+    // ---- Camera capture: right mouse OR middle mouse while over viewport ----
+    bool wantLook = shortcuts.isDown("camera.capture")
+                 || shortcuts.isDown("camera.lookMB");
+
+    if (wantLook && !cursorCaptured && viewportHoveredForCamera()) {
+        cursorCaptured = true;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    } else if (!wantLook && cursorCaptured) {
+        cursorCaptured = false;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 
-    camera.update(window, dt, captured,
-                  shortcuts.isDown("camera.forward"),
-                  shortcuts.isDown("camera.back"),
-                  shortcuts.isDown("camera.left"),
-                  shortcuts.isDown("camera.right"),
-                  shortcuts.isDown("camera.up"),
-                  shortcuts.isDown("camera.down"),
+    // While a Blender-style transform is running, WASD must not move the camera.
+    bool blockCam = tools.transformActive;
+    camera.update(window, dt, cursorCaptured,
+                  !blockCam && shortcuts.isDown("camera.forward"),
+                  !blockCam && shortcuts.isDown("camera.back"),
+                  !blockCam && shortcuts.isDown("camera.left"),
+                  !blockCam && shortcuts.isDown("camera.right"),
+                  !blockCam && shortcuts.isDown("camera.up"),
+                  !blockCam && shortcuts.isDown("camera.down"),
                   shortcuts.isDown("camera.fast"));
 
     tools.update(*this, dt);
@@ -272,6 +346,66 @@ void Application::drawUi() {
     drawViewportWindow();
     tools.onImGui(*this);
 
+    // ---- Content browser ------------------------------------------------
+    if (ImGui::Begin("Content")) {
+        if (ImGui::Button("Load Folder...")) contentFolderModalOpen = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Rescan")) {
+            int n = assets.scan(assets.root());
+            pushToast("Scanned " + std::to_string(n) + " asset(s)");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%d asset%s)",
+                            (int)assets.entries().size(),
+                            assets.entries().size() == 1 ? "" : "s");
+        ImGui::Separator();
+
+        ImGui::BeginChild("##contentList", ImVec2(0, 0), true);
+        for (auto& a : assets.entries()) {
+            ImGui::PushID((int)a.hash);
+
+            char label[512];
+            std::snprintf(label, sizeof(label), "%s%s",
+                          a.loaded ? "" : "[!] ", a.path.c_str());
+
+            if (ImGui::Selectable(label)) {
+                // single click: select, double-click: place at origin
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    if (!a.loaded) {
+                        Mesh m; std::string err;
+                        if (AssetImporter::loadMeshInto(a.fullPath, m, err)) {
+                            renderer.setMesh(a.hash, std::move(m));
+                            a.loaded = true;
+                        }
+                    }
+                    if (renderer.getMesh(a.hash)) {
+                        Instance inst;
+                        inst.meshHash = a.hash;
+                        inst.meshName = a.name;
+                        inst.position = { 0, 0, 0 };
+                        scene.addInstance(inst);
+                        pushToast("Placed " + a.name);
+                    }
+                }
+            }
+
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                size_t h = a.hash;
+                ImGui::SetDragDropPayload("ASSET_HASH", &h, sizeof(h));
+                ImGui::Text("Place %s", a.name.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\n%d indices", a.fullPath.c_str(), a.indexCount);
+
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+
+    // ---- Scene ----------------------------------------------------------
     if (ImGui::Begin("Scene")) {
         ImGui::Text("Instances: %d", (int)scene.instances.size());
         ImGui::Text("Draw calls: %d", renderer.lastDrawCalls);
@@ -281,18 +415,15 @@ void Application::drawUi() {
         ImGui::Checkbox("Show texture overlay", &showTextureOverlay);
         ImGui::Text("GAT: %dx%d cell=%.2f", scene.gatW, scene.gatH, scene.cellSize);
         ImGui::Separator();
-        if (ImGui::Button("Reseed cubes")) {
-            seedScene();
-            pushToast("Reseeded");
-        }
+        if (ImGui::Button("Reseed cubes")) { seedScene(); pushToast("Reseeded"); }
         ImGui::SameLine();
         if (ImGui::Button("Clear Undo")) commands.clear();
     }
     ImGui::End();
 
+    // ---- Config ---------------------------------------------------------
     if (ImGui::Begin("Config")) {
         ImGui::TextDisabled("Hot-reload: edit any config/*.json");
-
         if (ImGui::CollapsingHeader("Render", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& r = config.get("render");
             if (r.contains("clearColor")) {
@@ -315,30 +446,7 @@ void Application::drawUi() {
     }
     ImGui::End();
 
-    if (ImGui::Begin("Assets")) {
-        ImGui::TextDisabled("Assets/ .fbx .gltf .obj  ->  press Import Asset...");
-        if (ImGui::Button("Import Asset...")) importModalOpen = true;
-        ImGui::Separator();
-        std::error_code ec;
-        if (std::filesystem::exists("Assets", ec)) {
-            for (auto& p : std::filesystem::directory_iterator("Assets", ec)) {
-                if (!p.is_regular_file()) continue;
-                auto ext = p.path().extension().string();
-                if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" ||
-                    ext == ".glb" || ext == ".dae" || ext == ".ply" || ext == ".stl") {
-                    if (ImGui::Selectable(p.path().filename().string().c_str())) {
-                        strncpy_s(importPath, sizeof(importPath),
-                                  p.path().string().c_str(), _TRUNCATE);
-                        importModalOpen = true;
-                    }
-                }
-            }
-        } else {
-            ImGui::TextDisabled("Assets/ not found next to binary.");
-        }
-    }
-    ImGui::End();
-
+    // ---- Materials ------------------------------------------------------
     if (ImGui::Begin("Materials")) {
         auto& m = config.get("materials");
         if (m.contains("materials")) {
@@ -358,12 +466,14 @@ void Application::drawUi() {
     }
     ImGui::End();
 
+    // ---- Console --------------------------------------------------------
     if (ImGui::Begin("Console")) {
         for (auto& t : toasts.items())
             ImGui::TextWrapped("[%d] %s", (int)t.level, t.message.c_str());
     }
     ImGui::End();
 
+    // ---- Toasts ---------------------------------------------------------
     float y = 40.0f;
     for (auto& t : toasts.items()) {
         ImVec4 col(0.2f, 0.2f, 0.2f, 0.9f);
@@ -385,6 +495,7 @@ void Application::drawUi() {
     tools.drawRadialMenu(*this);
     tools.drawStatusBar(*this);
     drawImportModal();
+    drawContentFolderModal();
 }
 
 void Application::drawDockHost() {
@@ -422,13 +533,13 @@ void Application::drawDockHost() {
 
         ImGuiID main = dockId;
         ImGuiID left   = ImGui::DockBuilderSplitNode(main, ImGuiDir_Left,  0.20f, nullptr, &main);
-        ImGuiID right  = ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, 0.22f, nullptr, &main);
+        ImGuiID right  = ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, 0.24f, nullptr, &main);
         ImGuiID bottom = ImGui::DockBuilderSplitNode(main, ImGuiDir_Down,  0.28f, nullptr, &main);
 
         ImGui::DockBuilderDockWindow("Tools", left);
         ImGui::DockBuilderDockWindow("Scene", left);
         ImGui::DockBuilderDockWindow("Config", left);
-        ImGui::DockBuilderDockWindow("Assets", right);
+        ImGui::DockBuilderDockWindow("Content", right);
         ImGui::DockBuilderDockWindow("Materials", right);
         ImGui::DockBuilderDockWindow("Console", bottom);
         ImGui::DockBuilderDockWindow("Viewport", main);
@@ -445,9 +556,10 @@ void Application::drawMenuBar() {
 
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Import Asset...")) importModalOpen = true;
+        if (ImGui::MenuItem("Load Folder...")) contentFolderModalOpen = true;
         ImGui::Separator();
-        if (ImGui::MenuItem("Save (S)", "S"))   trySave();
-        if (ImGui::MenuItem("Load (F9)"))       tryLoad();
+        if (ImGui::MenuItem("Save (F5)")) trySave();
+        if (ImGui::MenuItem("Load (F9)")) tryLoad();
         if (ImGui::MenuItem("Export Map...")) {
             std::filesystem::create_directories("Save");
             std::string p = "Save/export_" + std::to_string((int)glfwGetTime()) + ".json";
@@ -466,7 +578,7 @@ void Application::drawMenuBar() {
     }
 
     if (ImGui::BeginMenu("View")) {
-        ImGui::MenuItem("GAT overlay", "G", &showGatOverlay);
+        ImGui::MenuItem("GAT overlay", "F4", &showGatOverlay);
         ImGui::MenuItem("Texture overlay", "L", &showTextureOverlay);
         if (ImGui::MenuItem("Reset layout")) {
             std::filesystem::remove("imgui.ini");
@@ -495,7 +607,7 @@ void Application::drawImportModal() {
             Mesh m;
             std::string err;
             if (AssetImporter::loadMeshInto(importPath, m, err)) {
-                size_t hash = std::hash<std::string>{}(std::string(importPath));
+                size_t hash = AssetRegistry::hashPath(std::string(importPath));
                 renderer.setMesh(hash, std::move(m));
                 Instance inst;
                 inst.meshHash = hash;
@@ -515,6 +627,30 @@ void Application::drawImportModal() {
     }
 }
 
+void Application::drawContentFolderModal() {
+    if (contentFolderModalOpen) {
+        ImGui::OpenPopup("Load Folder");
+        contentFolderModalOpen = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Load Folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Folder to scan recursively for meshes:");
+        ImGui::SetNextItemWidth(520);
+        ImGui::InputText("##folder", contentFolder, sizeof(contentFolder));
+
+        ImGui::Spacing();
+        if (ImGui::Button("Scan", ImVec2(120, 0))) {
+            int n = assets.scan(contentFolder);
+            pushToast("Found " + std::to_string(n) + " mesh file(s) in " + contentFolder);
+            preloadAssets();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
 void Application::drawViewportWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("Viewport");
@@ -529,9 +665,57 @@ void Application::drawViewportWindow() {
                  ImVec2((float)viewportFbo.width(), (float)viewportFbo.height()),
                  ImVec2(0, 1), ImVec2(1, 0));
 
-    // Cache the on-screen rect of the viewport image so tools can ray-cast into it.
     viewportImageMin  = origin;
     viewportImageSize = ImVec2((float)viewportFbo.width(), (float)viewportFbo.height());
+
+    // ---- Drag & drop a mesh from the Content panel into the viewport ----
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_HASH")) {
+            if (p->DataSize == sizeof(size_t)) {
+                size_t hash = *(const size_t*)p->Data;
+                AssetEntry* entry = assets.find(hash);
+
+                // make sure it's loaded
+                if (entry && !entry->loaded) {
+                    Mesh m; std::string err;
+                    if (AssetImporter::loadMeshInto(entry->fullPath, m, err)) {
+                        renderer.setMesh(entry->hash, std::move(m));
+                        entry->loaded = true;
+                    }
+                }
+
+                if (renderer.getMesh(hash)) {
+                    // build a ray from the drop pixel
+                    ImVec2 mouse = ImGui::GetIO().MousePos;
+                    float vpW = viewportImageSize.x;
+                    float vpH = viewportImageSize.y;
+                    float aspect = vpW / vpH;
+                    glm::mat4 vp = camera.projection(aspect) * camera.view();
+                    glm::mat4 invVP = glm::inverse(vp);
+
+                    float ndcX = ((mouse.x - viewportImageMin.x) / vpW) * 2.0f - 1.0f;
+                    float ndcY = 1.0f - ((mouse.y - viewportImageMin.y) / vpH) * 2.0f;
+                    glm::vec4 p0 = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+                    glm::vec4 p1 = invVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+                    glm::vec3 rayOrigin = glm::vec3(p0) / p0.w;
+                    glm::vec3 rayDir    = glm::normalize(glm::vec3(p1)/p1.w - rayOrigin);
+
+                    glm::vec3 hit;
+                    if (!raycastGround(scene, rayOrigin, rayDir, hit))
+                        hit = glm::vec3(0, 0, 0);
+
+                    Instance inst;
+                    inst.meshHash = hash;
+                    inst.meshName = entry ? entry->name : "asset";
+                    inst.position = hit;
+                    scene.addInstance(inst);
+                    pushToast("Placed " +
+                              (entry ? entry->name : std::string("asset")));
+                }
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
 
     bool hovered = ImGui::IsItemHovered();
     ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -578,7 +762,7 @@ void Application::drawViewportWindow() {
         }
     }
 
-    if (hovered && !cursorCaptured) {
+    if (hovered && !cursorCaptured && !tools.transformActive) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (auto* t = tools.active()) t->onMouseDown(*this, 0, mouse.x, mouse.y);
         }
@@ -712,6 +896,11 @@ void Application::handleGlobalKeys() {
     if (shortcuts.justPressed("view.toggleLandscape")) {
         showTextureOverlay = !showTextureOverlay;
         pushToast(showTextureOverlay ? "Texture overlay ON" : "Texture overlay OFF");
+    }
+    if (shortcuts.justPressed("edit.delete") && selectedInstance > 0) {
+        scene.removeInstance(selectedInstance);
+        pushToast("Deleted instance");
+        selectedInstance = -1;
     }
     if (shortcuts.justPressed("tool.cancel") && cursorCaptured) {
         cursorCaptured = false;

@@ -6,7 +6,7 @@ pushd "%ROOT%"
 echo Creating Map-Maker project tree at: %ROOT%
 
 for %%D in (
-  "config" "scripts" "bin"
+  "config" "scripts" "bin" "triplets"
   "src" "src\Core" "src\Render" "src\Scene" "src\Tools" "src\Save"
   "Assets" "Texture" "Material" "Save"
 ) do (
@@ -43,6 +43,8 @@ for %%F in (
   "src\Render\InstanceRenderer.cpp"
   "src\Render\AssetImporter.h"
   "src\Render\AssetImporter.cpp"
+  "src\Render\AssetRegistry.h"
+  "src\Render\AssetRegistry.cpp"
   "src\Scene\Camera.h"
   "src\Scene\Camera.cpp"
   "src\Scene\Scene.h"

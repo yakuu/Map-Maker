@@ -7,12 +7,13 @@
   "camera.down": 81,
   "camera.fast": 340,
   "camera.capture": 1001,
+  "camera.lookMB": 1002,
   "tool.radial": 258,
   "tool.cancel": 256,
   "edit.undo": 90,
   "edit.redo": 89,
   "edit.delete": 261,
-  "save.quick": 83,
-  "view.toggleGat": 71,
+  "save.quick": 294,
+  "view.toggleGat": 293,
   "view.toggleLandscape": 76
 }
