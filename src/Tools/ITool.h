@@ -1,4 +1,7 @@
 #pragma once
+#ifndef MAPMAKER_TOOLS_ITOOL_H
+#define MAPMAKER_TOOLS_ITOOL_H
+
 #include <string>
 
 class Application;
@@ -18,12 +21,13 @@ public:
     virtual void onDeactivate(Application&) {}
     virtual void onUpdate(Application&, float) {}
 
-    virtual void onMouseDown(Application&, int /*button*/, float /*x*/, float /*y*/) {}
-    virtual void onMouseMove(Application&, float /*x*/, float /*y*/) {}
-    virtual void onMouseUp(Application&, int /*button*/, float /*x*/, float /*y*/) {}
+    virtual void onMouseDown(Application&, int, float, float) {}
+    virtual void onMouseMove(Application&, float, float) {}
+    virtual void onMouseUp(Application&, int, float, float) {}
 
-    // Return true if the wheel event was consumed (blocks viewport scroll-through).
-    virtual bool onMouseWheel(Application&, float /*delta*/) { return false; }
+    virtual bool onMouseWheel(Application&, float) { return false; }
 
     virtual void onImGui(Application&) {}
 };
+
+#endif // MAPMAKER_TOOLS_ITOOL_H

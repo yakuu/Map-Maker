@@ -1,0 +1,91 @@
+#include "Application.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
+#include <vector>
+
+void Application::rebuildHeightmapMesh() {
+    Scene& s = scene;
+    if (s.heightmap.empty()) return;
+
+    std::vector<Vertex> verts;
+    std::vector<uint32_t> idx;
+    verts.reserve((size_t)s.hmW * s.hmH);
+
+    auto H = [&](int x, int y) {
+        x = std::clamp(x, 0, s.hmW - 1);
+        y = std::clamp(y, 0, s.hmH - 1);
+        return s.hmAt(x, y);
+    };
+
+    for (int y = 0; y < s.hmH; ++y) {
+        for (int x = 0; x < s.hmW; ++x) {
+            float h = s.hmAt(x, y);
+            glm::vec3 p = s.hmOrigin + glm::vec3(x * s.hmCell, h, y * s.hmCell);
+
+            float hl = H(x - 1, y), hr = H(x + 1, y);
+            float hd = H(x, y - 1), hu = H(x, y + 1);
+            glm::vec3 n = glm::normalize(glm::vec3(
+                -(hr - hl) / (2.0f * s.hmCell),
+                 1.0f,
+                -(hu - hd) / (2.0f * s.hmCell)));
+
+            glm::vec2 uv((float)x / (float)(s.hmW - 1),
+                         (float)y / (float)(s.hmH - 1));
+            verts.push_back({ p, n, uv });
+        }
+    }
+
+    for (int y = 0; y < s.hmH - 1; ++y) {
+        for (int x = 0; x < s.hmW - 1; ++x) {
+            uint32_t i0 = (uint32_t)(y * s.hmW + x);
+            uint32_t i1 = i0 + 1;
+            uint32_t i2 = i0 + s.hmW;
+            uint32_t i3 = i2 + 1;
+            idx.insert(idx.end(), { i0, i2, i1, i1, i2, i3 });
+        }
+    }
+
+    Mesh m;
+    m.upload(verts, idx);
+    m.name = "heightmap";
+    renderer.setMesh(heightmapHash, std::move(m));
+    renderedHeightmapVersion = s.heightmapVersion;
+}
+
+void Application::drawScene() {
+    viewportFbo.bind();
+    glViewport(0, 0, viewportFbo.width(), viewportFbo.height());
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
+    glm::mat4 vp = camera.projection(aspect) * camera.view();
+
+    renderer.begin(vp);
+
+    {
+        glm::mat4 m(1.0f);
+        renderer.submit(heightmapHash, m, glm::vec4(0.35f, 0.55f, 0.3f, 1.0f));
+    }
+
+    for (auto& i : scene.instances)
+        renderer.submit(i.meshHash, modelMatrix(i), i.tint);
+
+    renderer.end();
+
+    if (outlineEnabled && selectedInstance > 0) {
+        if (auto* inst = scene.find(selectedInstance)) {
+            glm::vec4 col = outlineColor;
+            if (transformActive)
+                col = glm::vec4(1.0f, 0.85f, 0.25f, 1.0f);
+            renderer.drawOutline(inst->meshHash, modelMatrix(*inst),
+                                 col, outlineThickness);
+        }
+    }
+
+    viewportFbo.unbind();
+}

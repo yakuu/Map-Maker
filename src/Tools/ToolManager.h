@@ -1,4 +1,7 @@
 #pragma once
+#ifndef MAPMAKER_TOOLS_TOOLMANAGER_H
+#define MAPMAKER_TOOLS_TOOLMANAGER_H
+
 #include "ITool.h"
 #include <memory>
 #include <vector>
@@ -29,10 +32,11 @@ public:
     bool radialOpen = false;
     int  radialHover = -1;
 
-    // Set true while a Blender-style transform is running, so the camera ignores WASD.
     bool transformActive = false;
 
 private:
     std::vector<std::unique_ptr<ITool>> tools;
     int activeIdx = 0;
 };
+
+#endif // MAPMAKER_TOOLS_TOOLMANAGER_H

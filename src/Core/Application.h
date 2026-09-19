@@ -1,4 +1,7 @@
 #pragma once
+#ifndef MAPMAKER_CORE_APPLICATION_H
+#define MAPMAKER_CORE_APPLICATION_H
+
 #include "Config.h"
 #include "Shortcuts.h"
 #include "Commands.h"
@@ -61,27 +64,39 @@ public:
     bool  contentFolderModalOpen = false;
     char  contentFolder[512] = "Assets";
 
-    // Selection outline + transform gizmo
+    std::string contentFilterExt;
+
     bool      outlineEnabled = true;
     float     outlineThickness = 0.06f;
     glm::vec4 outlineColor{ 0.25f, 0.75f, 1.0f, 1.0f };
 
-    // Published each frame by TransformTool so the viewport overlay can read it.
     bool      transformActive = false;
-    int       transformOp = 0;      // 0 none, 1 grab, 2 rotate, 3 scale
-    int       transformAxis = 0;    // 0 none, 1 X, 2 Y, 3 Z
+    int       transformOp = 0;
+    int       transformAxis = 0;
     glm::vec3 transformOrigin{ 0 };
 
-    // Snapping configuration (used by the transform tool while Ctrl is held)
-    float gridSnapTranslate = 0.5f;   // world units
-    float gridSnapRotate    = 15.0f;  // degrees
-    float gridSnapScale     = 0.1f;   // multiplier step
+    float gridSnapTranslate = 0.5f;
+    float gridSnapRotate    = 15.0f;
+    float gridSnapScale     = 0.1f;
+
+    float wheelCamStep = 1.25f;
+
+    int       gizmoDragAxis     = 0;
+    int       gizmoHoverAxis    = 0;
+    bool      gizmoDragScaling  = false;
+    int       gizmoDragTargetId = -1;
+    glm::vec3 gizmoDragStartPos{ 0 };
+    glm::vec3 gizmoDragStartScale{ 1 };
+    glm::vec2 gizmoDragClickMouse{ 0 };
+    glm::vec3 gizmoDragAxisDir{ 1, 0, 0 };
+    glm::vec2 gizmoDragAxisScreenDir{ 1, 0 };
+    float     gizmoDragScreenLen = 1.0f;
+    float     gizmoDragWorldLen  = 1.0f;
 
     void pushToast(const std::string& msg, ToastLevel lvl = ToastLevel::Info) {
         toasts.push(msg, lvl);
     }
 
-    // Rebuild the model matrix for an instance (shared by scene + outline paths).
     static glm::mat4 modelMatrix(const Instance& i);
 
 private:
@@ -96,6 +111,8 @@ private:
     void drawMenuBar();
     void drawImportModal();
     void drawContentFolderModal();
+    void drawContentPanel();
+    void drawSceneListPanel();
     void handleGlobalKeys();
     void seedScene();
     void rebuildHeightmapMesh();
@@ -105,8 +122,16 @@ private:
     void focusSelected();
     void duplicateSelected();
 
+    // Axis hit test for the gizmo. Returns 0 (none), 1 (X), 2 (Y) or 3 (Z).
+    int  computeGizmoHitAxis(const ImVec2& mouse);
+
+    // Handles the gizmo interaction. Returns true if the input was consumed.
+    bool handleGizmoInput(const ImVec2& mouse, bool clicked, bool down, bool released);
+
     bool viewportHoveredForCamera() const;
 
     double lastTime = 0.0;
     bool dockBuilt = false;
 };
+
+#endif // MAPMAKER_CORE_APPLICATION_H
