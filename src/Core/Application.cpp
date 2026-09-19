@@ -106,7 +106,17 @@ bool Application::init() {
 
     viewportFbo.resize(viewportW, viewportH);
     scene.initGat(64, 64);
-    scene.initHeightmap(33, 33);
+
+    // Larger default heightmap, centered on the world origin. 65x65 @ 1.5m
+    // gives a ~96-unit-wide terrain (was 33x33 → ~48 units).
+    {
+        constexpr int kHmW = 65;
+        constexpr int kHmH = 65;
+        scene.initHeightmap(kHmW, kHmH);
+        scene.hmOrigin = glm::vec3(
+            -(kHmW - 1) * scene.hmCell * 0.5f, 0.0f,
+            -(kHmH - 1) * scene.hmCell * 0.5f);
+    }
     seedScene();
     preloadAssets();
 
@@ -188,15 +198,20 @@ void Application::frame(float dt) {
     toasts.update();
     handleGlobalKeys();
 
-    // Right mouse captures the camera UNLESS the active tool has a quick
-    // menu, in which case right-click opens the tool settings. Middle mouse
-    // always captures for looking around.
     bool toolHasMenu = tools.active() && tools.active()->hasQuickMenu();
     bool wantLookByRMB = shortcuts.isDown("camera.capture") && !toolHasMenu;
     bool wantLookByMMB = shortcuts.isDown("camera.lookMB");
-    bool wantLook = wantLookByRMB || wantLookByMMB;
 
-    if (wantLook && !cursorCaptured && viewportHoveredForCamera()) {
+    const bool altDown =
+        glfwGetKey(window, GLFW_KEY_LEFT_ALT)  == GLFW_PRESS ||
+        glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+    const bool wantLookByAlt = altDown && !ImGui::GetIO().WantTextInput;
+
+    bool wantLook = wantLookByRMB || wantLookByMMB || wantLookByAlt;
+
+    const bool altLookBypassesHover = wantLookByAlt;   // Alt alone ignores hover
+    if (wantLook && !cursorCaptured &&
+        (viewportHoveredForCamera() || altLookBypassesHover)) {
         cursorCaptured = true;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     } else if (!wantLook && cursorCaptured) {
@@ -222,6 +237,28 @@ void Application::frame(float dt) {
         if (wheelThisFrame != 0.0f) {
             camera.position += camera.forward() * (wheelThisFrame * wheelCamStep);
             wheelThisFrame = 0.0f;   // consumed
+        }
+    }
+
+    // Alt-look fly: LMB pushes the camera forward, RMB pulls it back, both
+    // along the view direction. Speed matches the numpad fly speed so the two
+    // feel identical; Shift = 4x, matching Camera::update()'s fast modifier.
+    if (altDown && cursorCaptured && !blockCam) {
+        const bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT)
+                        == GLFW_PRESS;
+        const bool rmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT)
+                        == GLFW_PRESS;
+
+        float d = 0.0f;
+        if (lmb) d += 1.0f;
+        if (rmb) d -= 1.0f;
+
+        if (d != 0.0f) {
+            const bool fast =
+                glfwGetKey(window, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS ||
+                glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+            camera.position += camera.forward()
+                            * d * camera.speed * (fast ? 4.0f : 1.0f) * dt;
         }
     }
 

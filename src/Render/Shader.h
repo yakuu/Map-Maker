@@ -2,6 +2,7 @@
 #include "GL.h"
 #include <glm/glm.hpp>
 #include <string>
+#include <unordered_map>
 
 class Shader {
 public:
@@ -24,4 +25,8 @@ public:
 
 private:
     GLuint prog = 0;
+
+    // Per-program uniform location cache. Cleared on compile()/destroy().
+    // `mutable` so the const setters can populate it lazily.
+    mutable std::unordered_map<std::string, GLint> uniformCache;
 };

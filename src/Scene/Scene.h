@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 enum class GatCell : uint8_t {
     Walkable = 0,
@@ -44,6 +45,12 @@ public:
     void initGat(int w, int h);
     void initHeightmap(int w, int h);
 
+    // Grow/shrink the grid in place. New cells default to Walkable / height 0.
+    // `preserve` copies the overlapping top-left region of the old data; the
+    // origin is not moved, so terrain grows toward +X / +Z.
+    void resizeGat(int newW, int newH, bool preserve = true);
+    void resizeHeightmap(int newW, int newH, bool preserve = true);
+
     bool inBounds(int x, int y) const {
         return x >= 0 && y >= 0 && x < gatW && y < gatH;
     }
@@ -68,8 +75,14 @@ public:
     int addInstance(Instance inst);
     bool removeInstance(int id);
 
+    // If you ever mutate `instances` directly (the member is public for
+    // historical reasons), call this afterwards to resync the lookup.
+    // The normal add/remove/clear paths keep it in sync automatically.
+    void rebuildIdIndex();
+
     void clear();
 
 private:
     int nextId = 1;
+    std::unordered_map<int, size_t> idIndex;  // instance.id -> index in `instances`
 };

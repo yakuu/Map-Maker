@@ -32,16 +32,23 @@ void Camera::update(GLFWwindow* window, float dt, bool captured,
                     bool pitchUpDown, bool pitchDownDown,
                     bool fast) {
     // ---- Mouse-look while the cursor is captured ----
+    if (captured && !cursorWasCaptured) {
+        // Just entered capture: sync lastCursor to the current cursor so
+        // this frame's delta is zero. Prevents the "snap" on Alt-down.
+        double mx, my;
+        glfwGetCursorPos(window, &mx, &my);
+        lastCursorX = mx;
+        lastCursorY = my;
+    }
+    cursorWasCaptured = captured;
+
     if (captured) {
         double mx, my;
         glfwGetCursorPos(window, &mx, &my);
-        static double lastX = mx, lastY = my;
-        static bool first = true;
-        if (first) { lastX = mx; lastY = my; first = false; }
-
-        float dx = (float)(mx - lastX);
-        float dy = (float)(my - lastY);
-        lastX = mx; lastY = my;
+        const float dx = (float)(mx - lastCursorX);
+        const float dy = (float)(my - lastCursorY);
+        lastCursorX = mx;
+        lastCursorY = my;
 
         yaw   += dx * sensitivity;
         pitch -= dy * sensitivity;

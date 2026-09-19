@@ -21,7 +21,7 @@ GLuint CompileStage(GLenum type, const char* src) {
     }
     return s;
 }
-}
+} // namespace
 
 Shader::~Shader() { destroy(); }
 
@@ -50,16 +50,27 @@ bool Shader::compile(const char* vs, const char* fs) {
     }
     glDeleteShader(v);
     glDeleteShader(f);
+
+    uniformCache.clear();
     return prog != 0;
 }
 
 void Shader::destroy() {
     if (prog) { glDeleteProgram(prog); prog = 0; }
+    uniformCache.clear();
 }
 
 void Shader::bind() const { glUseProgram(prog); }
 
-GLint Shader::uniform(const char* n) const { return glGetUniformLocation(prog, n); }
+GLint Shader::uniform(const char* n) const {
+    auto it = uniformCache.find(n);
+    if (it != uniformCache.end()) return it->second;
+    // Cache misses are cached too: -1 is a legal no-op for glUniform*.
+    GLint loc = glGetUniformLocation(prog, n);
+    uniformCache.emplace(n, loc);
+    return loc;
+}
+
 void Shader::setMat4(const char* n, const glm::mat4& m) const {
     glUniformMatrix4fv(uniform(n), 1, GL_FALSE, glm::value_ptr(m));
 }

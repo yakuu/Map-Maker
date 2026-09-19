@@ -196,6 +196,11 @@ void InstanceRenderer::drawOutline(size_t meshHash, const glm::mat4& model,
 
     // Back-face shell: cull front faces so only the far side of the expanded
     // copy renders, producing a clean silhouette behind the real mesh.
+    // Save and restore previous state so we don't leak it to later passes.
+    const GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+    GLint prevCullFace = GL_BACK;
+    glGetIntegerv(GL_CULL_FACE_MODE, &prevCullFace);
+
     glEnable(GL_CULL_FACE);
     glCullFace(GL_FRONT);
 
@@ -204,6 +209,8 @@ void InstanceRenderer::drawOutline(size_t meshHash, const glm::mat4& model,
                             GL_UNSIGNED_INT, nullptr, 1);
     glBindVertexArray(0);
 
-    glCullFace(GL_BACK);
+    glCullFace((GLenum)prevCullFace);
+    if (!cullWasEnabled) glDisable(GL_CULL_FACE);
+
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }

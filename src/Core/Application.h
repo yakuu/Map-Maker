@@ -105,6 +105,7 @@ public:
     }
 
     static glm::mat4 modelMatrix(const Instance& i);
+    void resizeHeightmap(int newW, int newH, bool preserve = true);
 
 private:
     void frame(float dt);
@@ -112,6 +113,7 @@ private:
     void drawUi();
     void drawViewportWindow();
     void drawBrushPreview();
+    void drawHeightmapBrushPreview();
     void drawGizmoInViewport();
     void drawDockHost();
     void drawMenuBar();

@@ -89,3 +89,16 @@ void Application::tryLoad() {
         pushToast("Load failed: " + err, ToastLevel::Error);
     }
 }
+
+void Application::resizeHeightmap(int newW, int newH, bool preserve) {
+    if (newW < 2 || newH < 2) return;
+    if (newW == scene.hmW && newH == scene.hmH) return;
+
+    scene.resizeHeightmap(newW, newH, preserve);
+
+    // Force a mesh rebuild on the next frame.
+    renderedHeightmapVersion = -1;
+
+    pushToast("Heightmap: " + std::to_string(newW) + " x " +
+              std::to_string(newH));
+}

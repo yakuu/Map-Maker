@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 using namespace AppInternal;
 
@@ -30,6 +31,10 @@ void Application::drawViewportWindow() {
     ImGui::Image((ImTextureID)(intptr_t)viewportFbo.colorTexture(),
                  ImVec2((float)viewportFbo.width(), (float)viewportFbo.height()),
                  ImVec2(0, 1), ImVec2(1, 0));
+
+    // Capture hover state immediately after Image(). IsItemHovered() is only
+    // guaranteed valid when called right after the item was submitted.
+    const bool imageHovered = ImGui::IsItemHovered();
 
     viewportImageMin  = origin;
     viewportImageSize = ImVec2((float)viewportFbo.width(), (float)viewportFbo.height());
@@ -82,13 +87,9 @@ void Application::drawViewportWindow() {
 
     ImVec2 mouse = ImGui::GetIO().MousePos;
 
-    // Robust hover: the viewport window must actually be the topmost hovered
-    // window (respects docking and floating panels), and the cursor must be
-    // inside the image rect. Without the window check, clicking a tool in a
-    // docked panel that overlaps the viewport would also fire a brush stroke.
     bool windowHovered = ImGui::IsWindowHovered(
         ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-    bool itemHovered = ImGui::IsItemHovered();
+    bool itemHovered = imageHovered;
     bool rectHovered = (mouse.x >= viewportImageMin.x &&
                         mouse.x <  viewportImageMin.x + viewportImageSize.x &&
                         mouse.y >= viewportImageMin.y &&
@@ -96,16 +97,31 @@ void Application::drawViewportWindow() {
     bool hovered = windowHovered && (itemHovered || rectHovered)
                  && !ImGui::GetIO().WantTextInput;
 
-    // Wheel drives the brush radius only when the camera is not captured.
-    // The wheel was frozen into wheelThisFrame at the top of the frame so
-    // ImGui widgets can't steal it.
-    if (hovered && !cursorCaptured && !transformActive) {
-        if (wheelThisFrame != 0.0f) {
+    // -------------------------------------------------------------------
+    // Wheel routing.
+    //
+    // Priority:
+    //   1. Alt held        -> force camera zoom (bypasses the active tool).
+    //   2. Active tool     -> onMouseWheel() if it wants the tick.
+    //   3. Camera fallback -> dolly along view direction.
+    //
+    // When the cursor is captured, Application::frame() has already applied
+    // the wheel to the camera and zeroed wheelThisFrame, so this block is a
+    // no-op in that case.
+    // -------------------------------------------------------------------
+    if (hovered && wheelThisFrame != 0.0f) {
+        bool consumed = false;
+        const bool forceCamera = ImGui::GetIO().KeyAlt;
+
+        if (!cursorCaptured && !transformActive && !forceCamera) {
             if (auto* t = tools.active()) {
-                if (t->onMouseWheel(*this, wheelThisFrame))
-                    wheelThisFrame = 0.0f;
+                consumed = t->onMouseWheel(*this, wheelThisFrame);
             }
         }
+        if (!consumed) {
+            camera.position += camera.forward() * (wheelThisFrame * wheelCamStep);
+        }
+        wheelThisFrame = 0.0f;
     }
 
     // Rebuild hover-cell info.
@@ -137,11 +153,14 @@ void Application::drawViewportWindow() {
                     hoveredGatCell.y = cy;
                 }
             }
-            float tH = (scene.hmOrigin.y - a.y) / dir.y;
-            if (tH > 0.0f) {
-                glm::vec3 hit = a + dir * tH;
-                int hx = (int)std::round((hit.x - scene.hmOrigin.x) / scene.hmCell);
-                int hy = (int)std::round((hit.z - scene.hmOrigin.z) / scene.hmCell);
+            // March against the terrain mesh rather than the flat plane at
+            // hmOrigin.y, so the hovered vertex tracks the cursor on hills.
+            // raycastGround() already falls back to the y=0 plane if the
+            // terrain is empty.
+            glm::vec3 hmHit;
+            if (raycastGround(scene, a, dir, hmHit)) {
+                int hx = (int)std::round((hmHit.x - scene.hmOrigin.x) / scene.hmCell);
+                int hy = (int)std::round((hmHit.z - scene.hmOrigin.z) / scene.hmCell);
                 if (scene.hmInBounds(hx, hy)) {
                     hoveredHmVertex.valid = true;
                     hoveredHmVertex.x = hx;
@@ -151,16 +170,30 @@ void Application::drawViewportWindow() {
         }
     }
 
-    // Right-click opens tool settings when the active tool has a quick menu.
-    // (Right-click does not capture the camera in that case - handled in
-    // Application::frame.)
-    if (hovered && !cursorCaptured) {
-        if (auto* t = tools.active()) {
-            if (t->hasQuickMenu() &&
-                ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                ImGui::OpenPopup("ToolQuickMenu");
-            }
+    // -------------------------------------------------------------------
+    // Right-click quick menu.
+    //
+    // Open the popup whenever the viewport is hovered (and not captured) so
+    // the user always gets feedback — even for tools that don't implement a
+    // quick menu. The popup content below decides whether to show options or
+    // a "no quick options" notice.
+    // -------------------------------------------------------------------
+    if (hovered && !cursorCaptured &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        if (tools.active()) {
+            ImGui::OpenPopup("ToolQuickMenu");
         }
+    }
+
+    // Opt-in diagnostic: run with MM_DEBUG_INPUT=1 to trace RMB handling.
+    static const bool s_debugInput = std::getenv("MM_DEBUG_INPUT") != nullptr;
+    if (s_debugInput && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        auto* t = tools.active();
+        std::fprintf(stderr,
+                     "[rmb] hovered=%d captured=%d transform=%d tool=%s hasMenu=%d\n",
+                     (int)hovered, (int)cursorCaptured, (int)transformActive,
+                     t ? t->name() : "(none)",
+                     t ? (int)t->hasQuickMenu() : -1);
     }
 
     // Gizmo hover, then input.
@@ -179,7 +212,6 @@ void Application::drawViewportWindow() {
         bool released = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
         gizmoHandled = handleGizmoInput(mouse, clicked, down, released);
     }
-
     if (hovered && !cursorCaptured && !gizmoHandled && !transformActive) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (auto* t = tools.active()) t->onMouseDown(*this, 0, mouse.x, mouse.y);
@@ -191,20 +223,32 @@ void Application::drawViewportWindow() {
             if (auto* t = tools.active()) t->onMouseUp(*this, 0, mouse.x, mouse.y);
         }
     }
+    // Display the look-around instructions when the cursor is captured.
+    if (cursorCaptured) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddText(ImVec2(viewportImageMin.x + 12, viewportImageMin.y + 12),
+                    IM_COL32(255, 240, 160, 220),
+                    "LOOK  -  LMB fwd  |  RMB back  |  wheel dolly  |  numpad move");
+    }
 
     // GAT / texture state is drawn in 3D (see Application_Scene.cpp). Only
     // the brush cursor and the gizmo remain as 2D ImGui overlays.
     drawBrushPreview();
+    drawHeightmapBrushPreview();
     if (selectedInstance > 0) drawGizmoInViewport();
 
     // Tool quick-menu popup (floating, at cursor position).
     if (ImGui::BeginPopup("ToolQuickMenu")) {
         if (auto* t = tools.active()) {
             ImGui::TextColored(ImVec4(0.62f, 0.85f, 1.0f, 1.0f), "%s", t->name());
-            ImGui::TextDisabled("Right-click in viewport to reopen");
-            ImGui::Separator();
-            ImGui::SetNextItemWidth(180);
-            t->drawQuickMenu(*this);
+            if (t->hasQuickMenu()) {
+                ImGui::TextDisabled("Right-click in viewport to reopen");
+                ImGui::Separator();
+                ImGui::SetNextItemWidth(180);
+                t->drawQuickMenu(*this);
+            } else {
+                ImGui::TextDisabled("No quick options for this tool");
+            }
         }
         ImGui::EndPopup();
     }
@@ -279,7 +323,79 @@ void Application::drawBrushPreview() {
 }
 
 /* -------------------------------------------------------------------------
-   Gizmo (unchanged from the previous version)
+   Heightmap brush cursor preview
+   ------------------------------------------------------------------------- */
+
+void Application::drawHeightmapBrushPreview() {
+    if (!hoveredHmVertex.valid) return;
+    if (cursorCaptured) return;
+    if (transformActive) return;
+
+    ITool* t = tools.active();
+    if (!t) return;
+    const float rCells = t->heightmapBrushRadius();
+    if (rCells <= 0.0f) return;
+
+    const float vpW = (float)viewportFbo.width();
+    const float vpH = (float)viewportFbo.height();
+    if (vpW <= 0 || vpH <= 0) return;
+
+    const float aspect = vpW / vpH;
+    const glm::mat4 vp = camera.projection(aspect) * camera.view();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const int cx = hoveredHmVertex.x;
+    const int cy = hoveredHmVertex.y;
+
+    // heightmapBrushRadius() is in cells; convert to world units.
+    const float rWorld = rCells * scene.hmCell;
+
+    // Ring sampled in world XZ, lifted to the local terrain height so the
+    // cursor drapes over the surface instead of floating in a flat plane.
+    constexpr int   kSegments = 64;
+    constexpr float kLift     = 0.05f;
+
+    ImVec2 ring[kSegments];
+    int ringCount = 0;
+
+    const float cxWorld = scene.hmOrigin.x + (float)cx * scene.hmCell;
+    const float czWorld = scene.hmOrigin.z + (float)cy * scene.hmCell;
+
+    for (int i = 0; i < kSegments; ++i) {
+        const float a = (float)i / (float)kSegments * 6.28318530718f;
+        const float wx = cxWorld + std::cos(a) * rWorld;
+        const float wz = czWorld + std::sin(a) * rWorld;
+
+        // Nearest terrain sample for the ring point's height.
+        const int sx = (int)std::round((wx - scene.hmOrigin.x) / scene.hmCell);
+        const int sy = (int)std::round((wz - scene.hmOrigin.z) / scene.hmCell);
+        float wy = scene.hmOrigin.y;
+        if (scene.hmInBounds(sx, sy)) wy = scene.hmAt(sx, sy);
+
+        ImVec2 sp;
+        if (!projectToScreen(vp, viewportImageMin, vpW, vpH,
+                             glm::vec3(wx, wy + kLift, wz), sp))
+            continue;
+        ring[ringCount++] = sp;
+    }
+
+    if (ringCount >= 2) {
+        dl->AddPolyline(ring, ringCount, IM_COL32(120, 200, 255, 220),
+                        ImDrawFlags_None, 2.0f);
+    }
+
+    // Center marker at the hovered heightmap vertex.
+    glm::vec3 c = scene.hmWorldPos(cx, cy);
+    c.y += kLift;
+    ImVec2 sp;
+    if (projectToScreen(vp, viewportImageMin, vpW, vpH, c, sp)) {
+        dl->AddCircleFilled(sp, 4.0f, IM_COL32(255, 255, 255, 230));
+        dl->AddCircle(sp, 4.0f, IM_COL32(20, 20, 20, 200), 16, 1.5f);
+    }
+}
+
+/* -------------------------------------------------------------------------
+   Gizmo (unchanged)
    ------------------------------------------------------------------------- */
 
 int Application::computeGizmoHitAxis(const ImVec2& mouse) {

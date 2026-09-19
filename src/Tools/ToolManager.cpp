@@ -23,7 +23,7 @@ public:
     const char* name() const override { return "Select"; }
     const char* description() const override { return "Click an instance to select it."; }
     const char* statusHint() const override {
-        return "LMB pick   |   G/R/S transform   |   F focus   |   Ctrl+D duplicate";
+        return "LMB pick   |   G/R/S transform   |   F focus   |   Ctrl+D duplicate   |   Shift on Axis to Scale Directional";
     }
 
     void onMouseDown(Application& app, int button, float mx, float my) override {
@@ -393,6 +393,8 @@ public:
 
     bool hasQuickMenu() const override { return true; }
     int  brushCellRadius() const override { return radius; }
+    // No heightmapBrushRadius() override: this tool paints the GAT grid,
+    // not the heightmap, so it inherits the -1.0f default.
 
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("GAT Brush");
@@ -474,6 +476,9 @@ public:
     }
 
     bool hasQuickMenu() const override { return true; }
+    int  brushCellRadius() const override { return -1; }
+    float heightmapBrushRadius() const override { return radius; }
+
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("Landscape Brush");
         ImGui::SetNextItemWidth(180);

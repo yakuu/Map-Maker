@@ -249,5 +249,17 @@ void Application::drawMenuBar() {
     }
 
     ImGui::TextDisabled("| Map-Maker");
+    if (ImGui::BeginMenu("Terrain")) {
+    if (ImGui::MenuItem("Small  (33 x 33)"))  resizeHeightmap(33,  33);
+    if (ImGui::MenuItem("Medium (65 x 65)"))  resizeHeightmap(65,  65);
+    if (ImGui::MenuItem("Large  (129 x 129)")) resizeHeightmap(129, 129);
+    if (ImGui::MenuItem("Huge   (257 x 257)")) resizeHeightmap(257, 257);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Reset heights", nullptr, false, false)) {
+        // (You'd clear `scene.heightmap` and bump heightmapVersion here.)
+    }
+    ImGui::EndMenu();
+    }
     ImGui::EndMenuBar();
+
 }
