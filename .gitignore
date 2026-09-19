@@ -33,10 +33,9 @@ CMakeUserPresets.json
 *.cache
 *.ninja
 *.ninja_log
-*.txt
 *.json  # exclude if you want to keep your own config files
-# Keep your own CMakePresets.json if it's part of the repo:
 !CMakePresets.json
+!CMakeLists.txt
 
 # ---- vcpkg (local) ----
 vcpkg_installed/

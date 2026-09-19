@@ -1,0 +1,131 @@
+name: Build Release
+
+on:
+  push:
+    branches: [main, master]
+    tags:    ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+  VCPKG_TARGET_TRIPLET: x64-windows-static-v143
+  VCPKG_PLATFORM_TOOLSET: v143
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
+
+jobs:
+  build:
+    # Pin to windows-2022 so the v143 toolset is guaranteed to be present
+    # and matches the custom triplet.
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show vcpkg location
+        shell: pwsh
+        run: |
+          Write-Host "VCPKG_ROOT            = $env:VCPKG_ROOT"
+          Write-Host "VCPKG_OVERLAY_TRIPLETS= $env:VCPKG_OVERLAY_TRIPLETS"
+          Write-Host "VCPKG_TARGET_TRIPLET  = $env:VCPKG_TARGET_TRIPLET"
+          if (Test-Path "$env:VCPKG_ROOT\vcpkg.exe") {
+            Write-Host "vcpkg binary: $env:VCPKG_ROOT\vcpkg.exe"
+            & "$env:VCPKG_ROOT\vcpkg.exe" version
+          } else {
+            Write-Error "vcpkg not found at $env:VCPKG_ROOT"
+            exit 1
+          }
+
+      - name: Ensure custom triplet exists
+        shell: pwsh
+        run: |
+          $triplet = "triplets/x64-windows-static-v143.cmake"
+          if (-not (Test-Path $triplet)) {
+            Write-Host "Creating $triplet"
+            New-Item -ItemType Directory -Force -Path "triplets" | Out-Null
+            @"
+          set(VCPKG_TARGET_ARCHITECTURE x64)
+          set(VCPKG_CRT_LINKAGE static)
+          set(VCPKG_LIBRARY_LINKAGE static)
+          set(VCPKG_PLATFORM_TOOLSET v143)
+          "@ | Set-Content -Encoding ASCII -NoNewline $triplet
+          } else {
+            Write-Host "Found $triplet (using repo version)"
+          }
+
+      - name: Cache vcpkg built packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-v143-${{ hashFiles('vcpkg.json', 'triplets/*.cmake') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-v143-
+
+      - name: Configure (CMake preset)
+        shell: pwsh
+        run: |
+          cmake --preset default
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          cmake --build --preset release --config Release --parallel
+
+      - name: Verify binary
+        shell: pwsh
+        run: |
+          $exe = "bin/Release/MapMaker.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Expected build output not found: $exe"
+            Get-ChildItem -Recurse -Filter MapMaker.exe | ForEach-Object { Write-Host $_ }
+            exit 1
+          }
+          Get-Item $exe | Format-List Name, Length, FullName
+
+      - name: Package distribution
+        shell: pwsh
+        run: |
+          $dist = "dist/MapMaker"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          Copy-Item "bin/Release/MapMaker.exe" "$dist/MapMaker.exe"
+
+          # Runtime folders copied next to the exe
+          Copy-Item -Recurse "config" "$dist/config"
+
+          # Empty placeholder folders so the user has the full tree on first launch
+          foreach ($f in @("Assets", "Texture", "Material", "Save")) {
+            New-Item -ItemType Directory -Force -Path "$dist/$f" | Out-Null
+          }
+
+          # README next to the exe
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" "$dist/README.md"
+          }
+
+          # Zip it up
+          Compress-Archive -Path "$dist/*" -DestinationPath "dist/MapMaker-win64.zip" -Force
+
+          Get-ChildItem "dist" | Format-Table Name, Length
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MapMaker-win64
+          path: dist/MapMaker-win64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MapMaker-win64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
