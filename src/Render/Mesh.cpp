@@ -101,15 +101,22 @@ Mesh makeCube(float size) {
     return m;
 }
 
+// XZ-plane quad at height y. Winding is CCW when viewed from +Y so it
+// passes the default back-face cull with glCullFace(GL_BACK).
 Mesh makePlane(float size, float y) {
     const float h = size * 0.5f;
     std::vector<Vertex> v = {
-        {{-h, y,-h},{0,1,0},{0,0}}, {{ h, y,-h},{0,1,0},{1,0}},
-        {{ h, y, h},{0,1,0},{1,1}}, {{-h, y, h},{0,1,0},{0,1}},
+        {{-h, y,-h},{0,1,0},{0,0}},   // 0 back-left
+        {{ h, y,-h},{0,1,0},{1,0}},   // 1 back-right
+        {{ h, y, h},{0,1,0},{1,1}},   // 2 front-right
+        {{-h, y, h},{0,1,0},{0,1}},   // 3 front-left
     };
-    std::vector<uint32_t> idx = { 0,1,2, 0,2,3 };
+    // CCW from above:
+    //   triangle A: 0 -> 2 -> 1
+    //   triangle B: 0 -> 3 -> 2
+    std::vector<uint32_t> idx = { 0, 2, 1,  0, 3, 2 };
     Mesh m; m.upload(v, idx); m.name = "plane";
     return m;
 }
 
-}
+} // namespace MeshFactory

@@ -82,22 +82,33 @@ void Application::drawViewportWindow() {
 
     ImVec2 mouse = ImGui::GetIO().MousePos;
 
-    bool hovered = ImGui::IsItemHovered();
-    {
-        bool overImage = (mouse.x >= viewportImageMin.x &&
-                          mouse.x <  viewportImageMin.x + viewportImageSize.x &&
-                          mouse.y >= viewportImageMin.y &&
-                          mouse.y <  viewportImageMin.y + viewportImageSize.y);
-        if (overImage && !ImGui::GetIO().WantTextInput) hovered = true;
-    }
+    // Robust hover: the viewport window must actually be the topmost hovered
+    // window (respects docking and floating panels), and the cursor must be
+    // inside the image rect. Without the window check, clicking a tool in a
+    // docked panel that overlaps the viewport would also fire a brush stroke.
+    bool windowHovered = ImGui::IsWindowHovered(
+        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    bool itemHovered = ImGui::IsItemHovered();
+    bool rectHovered = (mouse.x >= viewportImageMin.x &&
+                        mouse.x <  viewportImageMin.x + viewportImageSize.x &&
+                        mouse.y >= viewportImageMin.y &&
+                        mouse.y <  viewportImageMin.y + viewportImageSize.y);
+    bool hovered = windowHovered && (itemHovered || rectHovered)
+                 && !ImGui::GetIO().WantTextInput;
 
+    // Wheel drives the brush radius only when the camera is not captured.
+    // The wheel was frozen into wheelThisFrame at the top of the frame so
+    // ImGui widgets can't steal it.
     if (hovered && !cursorCaptured && !transformActive) {
-        float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0.0f) {
-            if (auto* t = tools.active()) t->onMouseWheel(*this, wheel);
+        if (wheelThisFrame != 0.0f) {
+            if (auto* t = tools.active()) {
+                if (t->onMouseWheel(*this, wheelThisFrame))
+                    wheelThisFrame = 0.0f;
+            }
         }
     }
 
+    // Rebuild hover-cell info.
     hoveredGatCell.valid = false;
     hoveredHmVertex.valid = false;
 
@@ -140,7 +151,19 @@ void Application::drawViewportWindow() {
         }
     }
 
-    // GIZMO: precompute hover state, then handle input.
+    // Right-click opens tool settings when the active tool has a quick menu.
+    // (Right-click does not capture the camera in that case - handled in
+    // Application::frame.)
+    if (hovered && !cursorCaptured) {
+        if (auto* t = tools.active()) {
+            if (t->hasQuickMenu() &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                ImGui::OpenPopup("ToolQuickMenu");
+            }
+        }
+    }
+
+    // Gizmo hover, then input.
     if (gizmoDragAxis != 0) {
         gizmoHoverAxis = gizmoDragAxis;
     } else if (hovered && !cursorCaptured && selectedInstance > 0) {
@@ -169,16 +192,94 @@ void Application::drawViewportWindow() {
         }
     }
 
-    if (showTextureOverlay) drawTextureOverlayInViewport();
-    if (showGatOverlay)     drawGatOverlayInViewport();
+    // GAT / texture state is drawn in 3D (see Application_Scene.cpp). Only
+    // the brush cursor and the gizmo remain as 2D ImGui overlays.
+    drawBrushPreview();
     if (selectedInstance > 0) drawGizmoInViewport();
+
+    // Tool quick-menu popup (floating, at cursor position).
+    if (ImGui::BeginPopup("ToolQuickMenu")) {
+        if (auto* t = tools.active()) {
+            ImGui::TextColored(ImVec4(0.62f, 0.85f, 1.0f, 1.0f), "%s", t->name());
+            ImGui::TextDisabled("Right-click in viewport to reopen");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(180);
+            t->drawQuickMenu(*this);
+        }
+        ImGui::EndPopup();
+    }
 
     ImGui::End();
     ImGui::PopStyleVar();
 }
 
 /* -------------------------------------------------------------------------
-   Gizmo - hit test
+   Brush cursor preview
+   ------------------------------------------------------------------------- */
+
+void Application::drawBrushPreview() {
+    if (!hoveredGatCell.valid) return;
+    if (cursorCaptured) return;
+
+    ITool* t = tools.active();
+    if (!t) return;
+    int radius = t->brushCellRadius();
+    if (radius < 0) return;
+
+    float vpW = (float)viewportFbo.width();
+    float vpH = (float)viewportFbo.height();
+    if (vpW <= 0 || vpH <= 0) return;
+
+    float aspect = vpW / vpH;
+    glm::mat4 vp = camera.projection(aspect) * camera.view();
+
+    auto project = [&](const glm::vec3& world, ImVec2& out) -> bool {
+        return projectToScreen(vp, viewportImageMin, vpW, vpH, world, out);
+    };
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int cx = hoveredGatCell.x;
+    int cy = hoveredGatCell.y;
+
+    // Every cell that the current brush would affect, filled translucent.
+    for (int y = cy - radius; y <= cy + radius; ++y) {
+        for (int x = cx - radius; x <= cx + radius; ++x) {
+            if (!scene.inBounds(x, y)) continue;
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy > radius * radius) continue;
+
+            glm::vec3 c0 = scene.cellCenter(x, y);
+            glm::vec3 e = glm::vec3(scene.cellSize * 0.5f, 0, scene.cellSize * 0.5f);
+            ImVec2 p[4];
+            if (!project(c0 + glm::vec3(-e.x, 0, -e.z), p[0])) continue;
+            if (!project(c0 + glm::vec3( e.x, 0, -e.z), p[1])) continue;
+            if (!project(c0 + glm::vec3( e.x, 0,  e.z), p[2])) continue;
+            if (!project(c0 + glm::vec3(-e.x, 0,  e.z), p[3])) continue;
+
+            ImU32 fillCol   = IM_COL32(255, 255, 255, 45);
+            ImU32 strokeCol = IM_COL32(255, 255, 255, 130);
+            dl->AddConvexPolyFilled(p, 4, fillCol);
+            dl->AddPolyline(p, 4, strokeCol, ImDrawFlags_Closed, 1.0f);
+        }
+    }
+
+    // Center cell highlighted so the anchor point is obvious.
+    if (scene.inBounds(cx, cy)) {
+        glm::vec3 c0 = scene.cellCenter(cx, cy);
+        glm::vec3 e = glm::vec3(scene.cellSize * 0.5f, 0, scene.cellSize * 0.5f);
+        ImVec2 p[4];
+        if (project(c0 + glm::vec3(-e.x, 0, -e.z), p[0]) &&
+            project(c0 + glm::vec3( e.x, 0, -e.z), p[1]) &&
+            project(c0 + glm::vec3( e.x, 0,  e.z), p[2]) &&
+            project(c0 + glm::vec3(-e.x, 0,  e.z), p[3])) {
+            dl->AddPolyline(p, 4, IM_COL32(255, 255, 255, 230),
+                            ImDrawFlags_Closed, 2.0f);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------
+   Gizmo (unchanged from the previous version)
    ------------------------------------------------------------------------- */
 
 int Application::computeGizmoHitAxis(const ImVec2& mouse) {
@@ -224,10 +325,6 @@ int Application::computeGizmoHitAxis(const ImVec2& mouse) {
     }
     return bestAxis;
 }
-
-/* -------------------------------------------------------------------------
-   Gizmo - input
-   ------------------------------------------------------------------------- */
 
 bool Application::handleGizmoInput(const ImVec2& mouse, bool clicked, bool down, bool released) {
     if (gizmoDragAxis != 0) {
@@ -351,10 +448,6 @@ bool Application::handleGizmoInput(const ImVec2& mouse, bool clicked, bool down,
     return true;
 }
 
-/* -------------------------------------------------------------------------
-   Gizmo - draw
-   ------------------------------------------------------------------------- */
-
 void Application::drawGizmoInViewport() {
     Instance* inst = scene.find(selectedInstance);
     if (!inst) return;
@@ -430,105 +523,5 @@ void Application::drawGizmoInViewport() {
         ImVec2 tp = ImGui::GetIO().MousePos;
         dl->AddText(ImVec2(tp.x + 18, tp.y + 18),
                     IM_COL32(255, 240, 160, 255), buf);
-    }
-}
-
-/* -------------------------------------------------------------------------
-   Overlays
-   ------------------------------------------------------------------------- */
-
-void Application::drawGatOverlayInViewport() {
-    if (viewportFbo.width() <= 0 || viewportFbo.height() <= 0) return;
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 origin = viewportImageMin;
-    float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
-    glm::mat4 vp = camera.projection(aspect) * camera.view();
-
-    auto project = [&](const glm::vec3& world, ImVec2& out) -> bool {
-        return projectToScreen(vp, origin,
-                               (float)viewportFbo.width(),
-                               (float)viewportFbo.height(),
-                               world, out);
-    };
-
-    for (int y = 0; y < scene.gatH; ++y) {
-        for (int x = 0; x < scene.gatW; ++x) {
-            GatCell c = scene.at(x, y);
-            if (c == GatCell::Walkable) continue;
-
-            glm::vec3 c0 = scene.cellCenter(x, y);
-            glm::vec3 e = glm::vec3(scene.cellSize * 0.5f, 0, scene.cellSize * 0.5f);
-            ImVec2 p[4];
-            if (!project(c0 + glm::vec3(-e.x, 0, -e.z), p[0])) continue;
-            if (!project(c0 + glm::vec3( e.x, 0, -e.z), p[1])) continue;
-            if (!project(c0 + glm::vec3( e.x, 0,  e.z), p[2])) continue;
-            if (!project(c0 + glm::vec3(-e.x, 0,  e.z), p[3])) continue;
-
-            ImU32 col = (c == GatCell::NotWalkable)
-                ? IM_COL32(220, 60, 60, 90)
-                : IM_COL32(230, 200, 60, 90);
-
-            ImVec2 poly[4] = { p[0], p[1], p[2], p[3] };
-            dl->AddConvexPolyFilled(poly, 4, col);
-        }
-    }
-
-    if (hoveredGatCell.valid) {
-        glm::vec3 c0 = scene.cellCenter(hoveredGatCell.x, hoveredGatCell.y);
-        glm::vec3 e = glm::vec3(scene.cellSize * 0.5f, 0, scene.cellSize * 0.5f);
-        ImVec2 p[4];
-        if (project(c0 + glm::vec3(-e.x, 0, -e.z), p[0]) &&
-            project(c0 + glm::vec3( e.x, 0, -e.z), p[1]) &&
-            project(c0 + glm::vec3( e.x, 0,  e.z), p[2]) &&
-            project(c0 + glm::vec3(-e.x, 0,  e.z), p[3])) {
-            dl->AddPolyline(p, 4, IM_COL32(255, 255, 255, 220), ImDrawFlags_Closed, 2.0f);
-        }
-    }
-}
-
-void Application::drawTextureOverlayInViewport() {
-    if (viewportFbo.width() <= 0 || viewportFbo.height() <= 0) return;
-
-    static const ImU32 kColors[8] = {
-        IM_COL32(0,0,0,0),
-        IM_COL32(120,180,255,90),
-        IM_COL32(255,180,120,90),
-        IM_COL32(180,255,120,90),
-        IM_COL32(255,120,180,90),
-        IM_COL32(120,255,200,90),
-        IM_COL32(200,120,255,90),
-        IM_COL32(255,255,120,90),
-    };
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 origin = viewportImageMin;
-    float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
-    glm::mat4 vp = camera.projection(aspect) * camera.view();
-
-    auto project = [&](const glm::vec3& world, ImVec2& out) -> bool {
-        return projectToScreen(vp, origin,
-                               (float)viewportFbo.width(),
-                               (float)viewportFbo.height(),
-                               world, out);
-    };
-
-    for (int y = 0; y < scene.gatH; ++y) {
-        for (int x = 0; x < scene.gatW; ++x) {
-            uint8_t L = scene.textureLayers[(size_t)y * scene.gatW + x];
-            if (L == 0) continue;
-            ImU32 col = kColors[L % 8];
-            if ((col & IM_COL32_A_MASK) == 0) continue;
-
-            glm::vec3 c0 = scene.cellCenter(x, y);
-            glm::vec3 e = glm::vec3(scene.cellSize * 0.5f, 0, scene.cellSize * 0.5f);
-            ImVec2 p[4];
-            if (!project(c0 + glm::vec3(-e.x, 0, -e.z), p[0])) continue;
-            if (!project(c0 + glm::vec3( e.x, 0, -e.z), p[1])) continue;
-            if (!project(c0 + glm::vec3( e.x, 0,  e.z), p[2])) continue;
-            if (!project(c0 + glm::vec3(-e.x, 0,  e.z), p[3])) continue;
-            ImVec2 poly[4] = { p[0], p[1], p[2], p[3] };
-            dl->AddConvexPolyFilled(poly, 4, col);
-        }
     }
 }

@@ -59,24 +59,101 @@ void Application::drawScene() {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
+
+    // Overlays rely on alpha blending. Normal instances have alpha = 1, so
+    // this is a no-op for the main scene.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     float aspect = (float)viewportFbo.width() / (float)viewportFbo.height();
     glm::mat4 vp = camera.projection(aspect) * camera.view();
 
+    // Overlay lift is chosen so decals stay above the heightmap even at
+    // long viewing distances where depth precision is coarse.
+    constexpr float kOverlayLift = 0.05f;
+
+    // Nearest-neighbour terrain height for a world X/Z. Used to lift overlays
+    // above the heightmap so they don't get buried in a raised cell.
+    auto terrainY = [&](float worldX, float worldZ) -> float {
+        if (scene.heightmap.empty()) return scene.gatOrigin.y;
+        int hx = (int)std::round((worldX - scene.hmOrigin.x) / scene.hmCell);
+        int hy = (int)std::round((worldZ - scene.hmOrigin.z) / scene.hmCell);
+        if (!scene.hmInBounds(hx, hy)) return scene.gatOrigin.y;
+        return std::max(scene.gatOrigin.y, scene.hmAt(hx, hy));
+    };
+
     renderer.begin(vp);
 
+    // Terrain.
     {
         glm::mat4 m(1.0f);
         renderer.submit(heightmapHash, m, glm::vec4(0.35f, 0.55f, 0.3f, 1.0f));
     }
 
+    // Objects.
     for (auto& i : scene.instances)
         renderer.submit(i.meshHash, modelMatrix(i), i.tint);
 
+    // GAT overlay, one quad per non-walkable cell.
+    if (showGatOverlay) {
+        for (int y = 0; y < scene.gatH; ++y) {
+            for (int x = 0; x < scene.gatW; ++x) {
+                GatCell c = scene.at(x, y);
+                if (c == GatCell::Walkable) continue;
+
+                glm::vec3 center = scene.cellCenter(x, y);
+                float gy = terrainY(center.x, center.z) + kOverlayLift;
+
+                glm::mat4 m(1.0f);
+                m = glm::translate(m, glm::vec3(center.x, gy, center.z));
+                m = glm::scale(m, glm::vec3(scene.cellSize, 1.0f, scene.cellSize));
+
+                glm::vec4 tint = (c == GatCell::NotWalkable)
+                    ? glm::vec4(0.95f, 0.28f, 0.28f, 0.55f)
+                    : glm::vec4(0.98f, 0.85f, 0.30f, 0.55f);
+
+                renderer.submit(overlayQuadHash, m, tint);
+            }
+        }
+    }
+
+    // Texture-layer overlay, one quad per non-zero cell. Slightly higher
+    // than the GAT overlay so it wins when both are visible.
+    if (showTextureOverlay) {
+        static const glm::vec4 kColors[8] = {
+            { 0.00f, 0.00f, 0.00f, 0.00f },
+            { 0.47f, 0.70f, 1.00f, 0.50f },
+            { 1.00f, 0.70f, 0.47f, 0.50f },
+            { 0.70f, 1.00f, 0.47f, 0.50f },
+            { 1.00f, 0.47f, 0.70f, 0.50f },
+            { 0.47f, 1.00f, 0.80f, 0.50f },
+            { 0.80f, 0.47f, 1.00f, 0.50f },
+            { 1.00f, 1.00f, 0.47f, 0.50f },
+        };
+
+        for (int y = 0; y < scene.gatH; ++y) {
+            for (int x = 0; x < scene.gatW; ++x) {
+                uint8_t L = scene.textureLayers[(size_t)y * scene.gatW + x];
+                if (L == 0) continue;
+
+                glm::vec3 center = scene.cellCenter(x, y);
+                float gy = terrainY(center.x, center.z) + kOverlayLift + 0.01f;
+
+                glm::mat4 m(1.0f);
+                m = glm::translate(m, glm::vec3(center.x, gy, center.z));
+                m = glm::scale(m, glm::vec3(scene.cellSize, 1.0f, scene.cellSize));
+
+                renderer.submit(overlayQuadHash, m, kColors[L % 8]);
+            }
+        }
+    }
+
     renderer.end();
 
+    // Selection outline.
     if (outlineEnabled && selectedInstance > 0) {
         if (auto* inst = scene.find(selectedInstance)) {
             glm::vec4 col = outlineColor;
@@ -87,5 +164,6 @@ void Application::drawScene() {
         }
     }
 
+    glDisable(GL_BLEND);
     viewportFbo.unbind();
 }

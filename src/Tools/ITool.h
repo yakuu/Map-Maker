@@ -17,6 +17,10 @@ public:
     virtual bool hasQuickMenu() const { return false; }
     virtual void drawQuickMenu(Application&) {}
 
+    // Cell radius of the brush, for tools that paint into a grid. -1 means
+    // "no brush cursor". 0 is a single 1x1 cell.
+    virtual int brushCellRadius() const { return -1; }
+
     virtual void onActivate(Application&) {}
     virtual void onDeactivate(Application&) {}
     virtual void onUpdate(Application&, float) {}

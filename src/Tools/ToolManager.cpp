@@ -377,7 +377,7 @@ void TransformTool::onUpdate(Application& app, float) {
 
 class GATPaintTool : public ITool {
 public:
-    int radius = 2;
+    int radius = 0;                                    // default: 1x1 cell
     GatCell value = GatCell::NotWalkable;
     bool painting = false;
     std::vector<GatStrokeCommand::CellEdit> stroke;
@@ -388,14 +388,17 @@ public:
     const char* name() const override { return "GAT Paint"; }
     const char* description() const override { return "Paint walkability cells."; }
     const char* statusHint() const override {
-        return "LMB paint   |   Wheel radius   |   Right-click tool entry for quick settings";
+        return "LMB paint   |   Wheel radius   |   Right-click for quick settings";
     }
 
     bool hasQuickMenu() const override { return true; }
+    int  brushCellRadius() const override { return radius; }
+
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("GAT Brush");
-        ImGui::SetNextItemWidth(160);
+        ImGui::SetNextItemWidth(180);
         ImGui::SliderInt("Radius", &radius, 0, 12);
+        ImGui::TextDisabled("0 = 1x1 cell, 1 = 3x3 minus corners");
         int v = (int)value;
         const char* items[] = { "Walkable", "Not Walkable", "Event Walkable" };
         if (ImGui::Combo("Value", &v, items, 3)) value = (GatCell)v;
@@ -430,6 +433,7 @@ public:
 
     void onImGui(Application&) override {
         ImGui::SliderInt("Radius", &radius, 0, 12);
+        ImGui::TextDisabled("0 = 1x1, 1 = plus shape, 2 = 13-cell circle");
         int v = (int)value;
         const char* items[] = { "Walkable", "Not Walkable", "Event Walkable" };
         if (ImGui::Combo("Value", &v, items, 3)) value = (GatCell)v;
@@ -561,22 +565,24 @@ private:
 
 class TexturePaintTool : public ITool {
 public:
-    int radius = 2;
+    int radius = 0;                                    // default: 1x1 cell
     int layer = 1;
     bool painting = false;
 
     const char* name() const override { return "Texture Paint"; }
     const char* description() const override { return "Assign a texture layer index per cell."; }
     const char* statusHint() const override {
-        return "LMB paint   |   Wheel radius   |   L toggle overlay";
+        return "LMB paint   |   Wheel radius   |   Right-click quick settings   |   L toggle overlay";
     }
 
     bool hasQuickMenu() const override { return true; }
+    int  brushCellRadius() const override { return radius; }
+
     void drawQuickMenu(Application&) override {
         ImGui::TextDisabled("Texture Brush");
-        ImGui::SetNextItemWidth(160);
+        ImGui::SetNextItemWidth(180);
         ImGui::SliderInt("Radius", &radius, 0, 8);
-        ImGui::SetNextItemWidth(160);
+        ImGui::SetNextItemWidth(180);
         ImGui::SliderInt("Layer", &layer, 0, 7);
     }
 

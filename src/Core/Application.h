@@ -58,6 +58,9 @@ public:
     int    renderedHeightmapVersion = -1;
     size_t heightmapHash = 0xBEEFCAFEull;
 
+    // Overlay unit-quad registered with the renderer once in init().
+    size_t overlayQuadHash = 0;
+
     bool importModalOpen = false;
     char importPath[512] = "Assets/model.obj";
 
@@ -80,6 +83,10 @@ public:
     float gridSnapScale     = 0.1f;
 
     float wheelCamStep = 1.25f;
+
+    // Raw wheel collected via GLFW callback; consumed once per frame.
+    float wheelAccum     = 0.0f;
+    float wheelThisFrame = 0.0f;
 
     int       gizmoDragAxis     = 0;
     int       gizmoHoverAxis    = 0;
@@ -104,8 +111,7 @@ private:
     void drawScene();
     void drawUi();
     void drawViewportWindow();
-    void drawGatOverlayInViewport();
-    void drawTextureOverlayInViewport();
+    void drawBrushPreview();
     void drawGizmoInViewport();
     void drawDockHost();
     void drawMenuBar();
@@ -122,10 +128,7 @@ private:
     void focusSelected();
     void duplicateSelected();
 
-    // Axis hit test for the gizmo. Returns 0 (none), 1 (X), 2 (Y) or 3 (Z).
     int  computeGizmoHitAxis(const ImVec2& mouse);
-
-    // Handles the gizmo interaction. Returns true if the input was consumed.
     bool handleGizmoInput(const ImVec2& mouse, bool clicked, bool down, bool released);
 
     bool viewportHoveredForCamera() const;

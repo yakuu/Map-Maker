@@ -18,6 +18,11 @@ namespace {
 void glfwErrorCb(int code, const char* desc) {
     std::fprintf(stderr, "[glfw] error %d: %s\n", code, desc);
 }
+
+void glfwScrollCb(GLFWwindow* w, double /*xoff*/, double yoff) {
+    auto* app = (Application*)glfwGetWindowUserPointer(w);
+    if (app) app->wheelAccum += (float)yoff;
+}
 } // namespace
 
 glm::mat4 Application::modelMatrix(const Instance& i) {
@@ -46,6 +51,9 @@ bool Application::init() {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
+    glfwSetWindowUserPointer(window, this);
+    glfwSetScrollCallback(window, glfwScrollCb);
+
     if (!LoadGLFunctions()) {
         std::fprintf(stderr, "GL load failed: %s\n", LastGLLoadError());
         return false;
@@ -59,7 +67,8 @@ bool Application::init() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // NOTE: NavEnableKeyboard is intentionally NOT set, so Tab does not
+    // cycle ImGui widget focus and stays free for the radial menu.
 
     bool hadIni = std::filesystem::exists("imgui.ini");
     io.IniFilename = "imgui.ini";
@@ -85,6 +94,15 @@ bool Application::init() {
     };
 
     if (!renderer.init()) { pushToast("Renderer init failed", ToastLevel::Error); return false; }
+
+    // Register the unit quad used for GAT / texture overlays. A 1x1 quad in
+    // the XZ plane; per-instance model matrix scales it to cellSize.
+    {
+        Mesh quad = MeshFactory::makePlane(1.0f, 0.0f);
+        quad.name = "overlay_quad";
+        overlayQuadHash = 0xABCDEF1234ULL;
+        renderer.setMesh(overlayQuadHash, std::move(quad));
+    }
 
     viewportFbo.resize(viewportW, viewportH);
     scene.initGat(64, 64);
@@ -161,13 +179,22 @@ bool Application::viewportHoveredForCamera() const {
 void Application::frame(float dt) {
     glfwPollEvents();
 
+    // Freeze the wheel for the whole frame so nothing downstream can eat it.
+    wheelThisFrame = wheelAccum;
+    wheelAccum = 0.0f;
+
     config.poll();
     shortcuts.update(window);
     toasts.update();
     handleGlobalKeys();
 
-    bool wantLook = shortcuts.isDown("camera.capture")
-                 || shortcuts.isDown("camera.lookMB");
+    // Right mouse captures the camera UNLESS the active tool has a quick
+    // menu, in which case right-click opens the tool settings. Middle mouse
+    // always captures for looking around.
+    bool toolHasMenu = tools.active() && tools.active()->hasQuickMenu();
+    bool wantLookByRMB = shortcuts.isDown("camera.capture") && !toolHasMenu;
+    bool wantLookByMMB = shortcuts.isDown("camera.lookMB");
+    bool wantLook = wantLookByRMB || wantLookByMMB;
 
     if (wantLook && !cursorCaptured && viewportHoveredForCamera()) {
         cursorCaptured = true;
@@ -192,9 +219,9 @@ void Application::frame(float dt) {
                   shortcuts.isDown("camera.fast"));
 
     if (cursorCaptured && !blockCam) {
-        float wheel = ImGui::GetIO().MouseWheel;
-        if (wheel != 0.0f) {
-            camera.position += camera.forward() * (wheel * wheelCamStep);
+        if (wheelThisFrame != 0.0f) {
+            camera.position += camera.forward() * (wheelThisFrame * wheelCamStep);
+            wheelThisFrame = 0.0f;   // consumed
         }
     }
 
