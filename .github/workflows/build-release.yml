@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write
 
+# Cancel superseded runs on the same branch/tag so a stale build
+# doesn't burn runner minutes after a newer push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   VCPKG_ROOT: C:\vcpkg
   VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
@@ -20,57 +26,68 @@ env:
 
 jobs:
   build:
-    # Pin to windows-2022 so the v143 toolset is guaranteed to be present
-    # and matches the custom triplet.
+    # windows-2022 guarantees the v143 toolset that matches the triplet.
     runs-on: windows-2022
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show vcpkg location
+      - name: Show vcpkg version
         shell: pwsh
         run: |
           Write-Host "VCPKG_ROOT            = $env:VCPKG_ROOT"
-          Write-Host "VCPKG_OVERLAY_TRIPLETS= $env:VCPKG_OVERLAY_TRIPLETS"
           Write-Host "VCPKG_TARGET_TRIPLET  = $env:VCPKG_TARGET_TRIPLET"
-          if (Test-Path "$env:VCPKG_ROOT\vcpkg.exe") {
-            Write-Host "vcpkg binary: $env:VCPKG_ROOT\vcpkg.exe"
-            & "$env:VCPKG_ROOT\vcpkg.exe" version
-          } else {
-            Write-Error "vcpkg not found at $env:VCPKG_ROOT"
-            exit 1
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            throw "vcpkg not found at $env:VCPKG_ROOT"
           }
+          & "$env:VCPKG_ROOT\vcpkg.exe" version
 
       - name: Ensure custom triplet exists
         shell: pwsh
         run: |
           $triplet = "triplets/x64-windows-static-v143.cmake"
           if (-not (Test-Path $triplet)) {
-            Write-Host "Creating $triplet"
+            Write-Host "Creating fallback $triplet"
             New-Item -ItemType Directory -Force -Path "triplets" | Out-Null
             @"
           set(VCPKG_TARGET_ARCHITECTURE x64)
           set(VCPKG_CRT_LINKAGE static)
           set(VCPKG_LIBRARY_LINKAGE static)
           set(VCPKG_PLATFORM_TOOLSET v143)
+          set(VCPKG_BUILD_TYPE release)
           "@ | Set-Content -Encoding ASCII -NoNewline $triplet
           } else {
             Write-Host "Found $triplet (using repo version)"
           }
 
-      - name: Cache vcpkg built packages
+      # Cache both the configured build tree and the vcpkg binary archives.
+      # - build/                 -> CMakeCache.txt + vcpkg_installed + obj files
+      # - vcpkg-cache/           -> pre-built package zips (used on cache miss
+      #                             so vcpkg doesn't recompile assimp)
+      - name: Restore vcpkg packages + build tree
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-${{ runner.os }}-v143-${{ hashFiles('vcpkg.json', 'triplets/*.cmake') }}
+          path: |
+            vcpkg-cache
+            build
+          key: mapmaker-v143-v2-${{ hashFiles('vcpkg.json', 'triplets/*.cmake', 'CMakeLists.txt', 'CMakePresets.json') }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-v143-
+            mapmaker-v143-v2-
 
-      - name: Configure (CMake preset)
+      # If the cache restored a configured build tree, skip configure.
+      # MSBuild auto-reconfigures if CMakeLists.txt is newer than the cache,
+      # so this is safe.
+      - name: Configure (skip on cache hit)
         shell: pwsh
         run: |
-          cmake --preset default
+          if (Test-Path "build/CMakeCache.txt") {
+            Write-Host "Cache hit: build/CMakeCache.txt exists - skipping configure."
+          } else {
+            Write-Host "Cache miss: running full configure (this is the slow path)."
+            cmake --preset default
+          }
 
       - name: Build (Release)
         shell: pwsh
@@ -82,9 +99,8 @@ jobs:
         run: |
           $exe = "bin/Release/MapMaker.exe"
           if (-not (Test-Path $exe)) {
-            Write-Error "Expected build output not found: $exe"
             Get-ChildItem -Recurse -Filter MapMaker.exe | ForEach-Object { Write-Host $_ }
-            exit 1
+            throw "Expected build output not found: $exe"
           }
           Get-Item $exe | Format-List Name, Length, FullName
 
@@ -95,23 +111,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
           Copy-Item "bin/Release/MapMaker.exe" "$dist/MapMaker.exe"
-
-          # Runtime folders copied next to the exe
           Copy-Item -Recurse "config" "$dist/config"
 
-          # Empty placeholder folders so the user has the full tree on first launch
           foreach ($f in @("Assets", "Texture", "Material", "Save")) {
             New-Item -ItemType Directory -Force -Path "$dist/$f" | Out-Null
           }
-
-          # README next to the exe
           if (Test-Path "README.md") {
             Copy-Item "README.md" "$dist/README.md"
           }
 
-          # Zip it up
           Compress-Archive -Path "$dist/*" -DestinationPath "dist/MapMaker-win64.zip" -Force
-
           Get-ChildItem "dist" | Format-Table Name, Length
 
       - name: Upload build artifact
