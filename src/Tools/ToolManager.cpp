@@ -666,6 +666,7 @@ public:
         Instance inst;
         inst.meshHash = hash;
         inst.meshName = p;
+        inst.meshPath = p;
         inst.position = { 0, 0, 0 };
         app.scene.addInstance(inst);
         app.pushToast("Imported " + p);

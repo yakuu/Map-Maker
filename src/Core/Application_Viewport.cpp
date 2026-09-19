@@ -75,6 +75,7 @@ void Application::drawViewportWindow() {
                     Instance inst;
                     inst.meshHash = hash;
                     inst.meshName = entry ? entry->name : "asset";
+                    inst.meshPath = entry ? entry->fullPath : "";
                     inst.position = hit;
                     scene.addInstance(inst);
                     pushToast("Placed " +

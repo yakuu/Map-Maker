@@ -102,6 +102,7 @@ void Application::drawContentPanel() {
                     Instance inst;
                     inst.meshHash = a.hash;
                     inst.meshName = a.name;
+                    inst.meshPath = a.fullPath;
                     inst.position = { 0, 0, 0 };
                     scene.addInstance(inst);
                     pushToast("Placed " + a.name);
@@ -242,6 +243,7 @@ void Application::drawImportModal() {
                 Instance inst;
                 inst.meshHash = hash;
                 inst.meshName = importPath;
+                inst.meshPath = importPath;
                 inst.position = { 0, 0, 0 };
                 scene.addInstance(inst);
                 pushToast(std::string("Imported ") + importPath);

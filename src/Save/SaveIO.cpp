@@ -18,6 +18,7 @@ bool save(const std::string& path, const Scene& s) {
             {"id", i.id},
             {"meshHash", (uint64_t)i.meshHash},
             {"meshName", i.meshName},
+            {"meshPath", i.meshPath},
             {"position", {i.position.x, i.position.y, i.position.z}},
             {"rotation", {i.rotation.x, i.rotation.y, i.rotation.z}},
             {"scale",    {i.scale.x, i.scale.y, i.scale.z}},
@@ -78,6 +79,7 @@ bool load(const std::string& path, Scene& s, std::string& errorOut) {
                 i.id       = e.value("id", 0);
                 i.meshHash = (size_t)e.value("meshHash", (uint64_t)0);
                 i.meshName = e.value("meshName", std::string{});
+                i.meshPath = e.value("meshPath", std::string{});
                 i.materialIndex = e.value("materialIndex", 0);
 
                 auto p  = e.value("position", std::vector<float>{0,0,0});
