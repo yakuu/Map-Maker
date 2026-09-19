@@ -3,6 +3,9 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <vector>
+#include <algorithm>
+#include <cstring>
+
 
 using nlohmann::json;
 
@@ -14,11 +17,26 @@ bool save(const std::string& path, const Scene& s) {
 
     json arr = json::array();
     for (auto& i : s.instances) {
+
+        // Shape meshPath at export time: normalize slashes and re-root
+        // under the game's asset folder. Edit kAssetPrefix to change the
+        // subdirectory the game will look in.
+        constexpr const char* kSourceRoot  = "Assets/";              // what Map-Maker scans
+        constexpr const char* kAssetPrefix = "Assets/map/obj/";      // what the game expects
+
+        std::string normalized = i.meshPath;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+        if (normalized.compare(0, std::strlen(kSourceRoot), kSourceRoot) == 0) {
+            normalized = normalized.substr(std::strlen(kSourceRoot));
+        }
+        const std::string exportPath =
+            normalized.empty() ? std::string{} : (std::string(kAssetPrefix) + normalized);
+
         arr.push_back({
             {"id", i.id},
             {"meshHash", (uint64_t)i.meshHash},
             {"meshName", i.meshName},
-            {"meshPath", i.meshPath},
+            {"meshPath", exportPath},
             {"position", {i.position.x, i.position.y, i.position.z}},
             {"rotation", {i.rotation.x, i.rotation.y, i.rotation.z}},
             {"scale",    {i.scale.x, i.scale.y, i.scale.z}},
