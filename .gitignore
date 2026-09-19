@@ -1,3 +1,13 @@
+# =========================================================================
+# Map-Maker .gitignore
+#
+# Rules:
+#   - Runtime output folders are anchored with a leading "/" so they only
+#     match at the repo root and never eat src/ subdirectories.
+#   - config/*.json is intentionally tracked; do not add *.json here.
+#   - Build artifacts, IDE files, and profiling data are ignored.
+# =========================================================================
+
 # ---- Visual Studio / MSVC ----
 .vs/
 *.user
@@ -5,69 +15,86 @@
 *.ipch
 *.ilk
 *.pch
-*.obj
-*.pch
 *.res
 *.tlb
 *.tlog
-*.lib
-*.pdb
-*.exp
-*.manifest
 *.sdf
 *.cache
 *.ncx
 *.resx
 *.resw
-*.xml
-*.log
 
-# ---- CMake / Ninja ----
-build/
-cmake-build-*/
+# ---- Build outputs (anchored) ----
+/build/
+/bin/
+/dist/
+/out/
+/cmake-build-*/
+/vcpkg_installed/
+/vcpkg-cache/
+
+# CMake generated files (only at any build tree)
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-CMakePresets.json
 CMakeUserPresets.json
-*.cache
-*.ninja
-*.ninja_log
-*.json  # exclude if you want to keep your own config files
-!CMakePresets.json
-!CMakeLists.txt
 
-# ---- vcpkg (local) ----
-vcpkg_installed/
-vcpkg/
-!vcpkg.json
-!vcpkg-configuration.json
+# ---- Local vcpkg clone (if any) ----
+/vcpkg/
 
 # ---- Editor / IDE ----
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
+imgui.ini
 
-# ---- Map-Maker specific ----
-Assets/
-Texture/
-Material/
-Save/
-bin/
+# ---- Runtime folders (anchored so src/Save/ etc. stays tracked) ----
+# These are the runtime data folders next to the exe. Source lives under
+# src/, not at the root, so anchoring is safe.
+/Save/
+/Assets/
+/Texture/
+/Material/
+
+# ---- Binaries / debug symbols in the repo root only ----
+# Kept unanchored on purpose: we never want .exe/.dll in the repo, even
+# accidentally committed under a subfolder.
 *.exe
 *.dll
 *.so
 *.dylib
+*.lib
+*.exp
+*.pdb
+*.manifest
+
+# ---- Logs (do not blanket-ignore .log inside tools/) ----
+/*.log
+logs/
+coverage/
 
 # ---- Debug / Profiling ----
 *.profraw
 *.profdata
 profiling/
-coverage/
 
-# ---- Git ----
-.gitattributes
-.gitmodules
+# =========================================================================
+# Explicit "keep these tracked" overrides
+#
+# Git applies ! rules after normal rules, so these win even if a broad
+# pattern above would otherwise catch them.
+# =========================================================================
+!CMakeLists.txt
+!CMakePresets.json
+!vcpkg.json
+!vcpkg-configuration.json
+!.gitattributes
+!.gitmodules
+
+# Keep the shipped JSON config even though some tools ignore *.json.
+!config/*.json
+!config/**/*.json
