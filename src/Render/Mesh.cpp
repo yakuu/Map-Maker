@@ -6,6 +6,8 @@ Mesh::~Mesh() { destroy(); }
 Mesh::Mesh(Mesh&& o) noexcept {
     vao = o.vao; vbo = o.vbo; ebo = o.ebo;
     indexCount = o.indexCount; name = std::move(o.name);
+    cpuVertices = std::move(o.cpuVertices);
+    cpuIndices = std::move(o.cpuIndices);
     o.vao = o.vbo = o.ebo = 0; o.indexCount = 0;
 }
 
@@ -14,6 +16,8 @@ Mesh& Mesh::operator=(Mesh&& o) noexcept {
         destroy();
         vao = o.vao; vbo = o.vbo; ebo = o.ebo;
         indexCount = o.indexCount; name = std::move(o.name);
+        cpuVertices = std::move(o.cpuVertices);
+        cpuIndices = std::move(o.cpuIndices);
         o.vao = o.vbo = o.ebo = 0; o.indexCount = 0;
     }
     return *this;
@@ -23,6 +27,9 @@ void Mesh::upload(const std::vector<Vertex>& verts,
                   const std::vector<uint32_t>& indices) {
     destroy();
     indexCount = (GLsizei)indices.size();
+    cpuVertices.reserve(verts.size());
+    for (const Vertex& vertex : verts) cpuVertices.push_back(vertex.position);
+    cpuIndices = indices;
 
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
@@ -58,6 +65,8 @@ void Mesh::destroy() {
     if (vbo) { glDeleteBuffers(1, &vbo); vbo = 0; }
     if (vao) { glDeleteVertexArrays(1, &vao); vao = 0; }
     indexCount = 0;
+    cpuVertices.clear();
+    cpuIndices.clear();
 }
 
 void Mesh::draw() const {

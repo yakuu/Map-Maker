@@ -28,6 +28,13 @@ public:
     GLuint vao = 0, vbo = 0, ebo = 0;
     GLsizei indexCount = 0;
     std::string name;
+
+    const std::vector<glm::vec3>& pickVertices() const { return cpuVertices; }
+    const std::vector<uint32_t>& pickIndices() const { return cpuIndices; }
+
+private:
+    std::vector<glm::vec3> cpuVertices;
+    std::vector<uint32_t> cpuIndices;
 };
 
 namespace MeshFactory {

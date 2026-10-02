@@ -44,6 +44,8 @@ bool Application::init() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 4);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
     window = glfwCreateWindow(1600, 900, "Map-Maker", nullptr, nullptr);
     if (!window) { std::fprintf(stderr, "window creation failed\n"); return false; }
@@ -70,8 +72,8 @@ bool Application::init() {
     // NOTE: NavEnableKeyboard is intentionally NOT set, so Tab does not
     // cycle ImGui widget focus and stays free for the radial menu.
 
-    bool hadIni = std::filesystem::exists("imgui.ini");
-    io.IniFilename = "imgui.ini";
+    bool hadIni = std::filesystem::exists(kImGuiLayoutPath);
+    io.IniFilename = kImGuiLayoutPath;
     dockBuilt = hadIni;
 
     ImGui::StyleColorsDark();
@@ -123,6 +125,7 @@ bool Application::init() {
     tools.init(*this);
 
     glfwShowWindow(window);
+    glfwMaximizeWindow(window);
     lastTime = glfwGetTime();
     pushToast("Map-Maker ready", ToastLevel::Info);
     return true;

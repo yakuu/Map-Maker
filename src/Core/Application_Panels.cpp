@@ -15,7 +15,7 @@
    ------------------------------------------------------------------------- */
 
 void Application::drawContentPanel() {
-    if (!ImGui::Begin("Content")) { ImGui::End(); return; }
+    if (!ImGui::Begin("Content", &showContent)) { ImGui::End(); return; }
 
     if (ImGui::Button("Load Folder...")) contentFolderModalOpen = true;
     ImGui::SameLine();
@@ -104,7 +104,10 @@ void Application::drawContentPanel() {
                     inst.meshName = a.name;
                     inst.meshPath = a.fullPath;
                     inst.position = { 0, 0, 0 };
-                    scene.addInstance(inst);
+                    const int id = scene.addInstance(inst);
+                    commands.push(std::make_unique<InstancePresenceCommand>(
+                        &scene, *scene.find(id), scene.indexOf(id), true,
+                        "Place Asset"));
                     pushToast("Placed " + a.name);
                 }
             }
@@ -132,7 +135,7 @@ void Application::drawContentPanel() {
    ------------------------------------------------------------------------- */
 
 void Application::drawSceneListPanel() {
-    if (!ImGui::Begin("Scene List")) { ImGui::End(); return; }
+    if (!ImGui::Begin("Scene List", &showSceneList)) { ImGui::End(); return; }
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     if (ImGui::TreeNodeEx("Obj", ImGuiTreeNodeFlags_DefaultOpen |
@@ -176,7 +179,11 @@ void Application::drawSceneListPanel() {
                         }
                         if (ImGui::MenuItem("Delete")) {
                             int delId = inst->id;
+                            const Instance deleted = *inst;
+                            const size_t index = scene.indexOf(delId);
                             scene.removeInstance(delId);
+                            commands.push(std::make_unique<InstancePresenceCommand>(
+                                &scene, deleted, index, false, "Delete Instance"));
                             if (selectedInstance == delId)
                                 selectedInstance = -1;
                             ImGui::EndPopup();
@@ -207,8 +214,17 @@ void Application::drawSceneListPanel() {
         ImGui::Checkbox("Show texture overlay", &showTextureOverlay);
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset heightmap")) {
+            std::vector<HeightmapStrokeCommand::VertexEdit> edits;
+            edits.reserve(scene.heightmap.size());
+            for (int y = 0; y < scene.hmH; ++y) {
+                for (int x = 0; x < scene.hmW; ++x) {
+                    const float before = scene.hmAt(x, y);
+                    if (before != 0.0f) edits.push_back({ x, y, before, 0.0f });
+                }
+            }
             std::fill(scene.heightmap.begin(), scene.heightmap.end(), 0.0f);
-            scene.heightmapVersion++;
+            if (!edits.empty())
+                commands.push(std::make_unique<HeightmapStrokeCommand>(&scene, std::move(edits)));
             pushToast("Heightmap reset");
         }
 
@@ -245,7 +261,9 @@ void Application::drawImportModal() {
                 inst.meshName = importPath;
                 inst.meshPath = importPath;
                 inst.position = { 0, 0, 0 };
-                scene.addInstance(inst);
+                const int id = scene.addInstance(inst);
+                commands.push(std::make_unique<InstancePresenceCommand>(
+                    &scene, *scene.find(id), scene.indexOf(id), true, "Import Asset"));
                 pushToast(std::string("Imported ") + importPath);
             } else {
                 pushToast("Import failed: " + err, ToastLevel::Error);

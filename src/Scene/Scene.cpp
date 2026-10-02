@@ -36,6 +36,27 @@ int Scene::addInstance(Instance inst) {
     return instances.back().id;
 }
 
+void Scene::insertInstance(Instance inst, size_t index) {
+    if (inst.id <= 0 || find(inst.id)) {
+        addInstance(std::move(inst));
+        return;
+    }
+
+    index = std::min(index, instances.size());
+    instances.insert(instances.begin() + (std::ptrdiff_t)index, std::move(inst));
+    nextId = std::max(nextId, instances[index].id + 1);
+    for (size_t i = index; i < instances.size(); ++i)
+        idIndex[instances[i].id] = i;
+}
+
+size_t Scene::indexOf(int id) const {
+    auto it = idIndex.find(id);
+    if (it == idIndex.end() || it->second >= instances.size() ||
+        instances[it->second].id != id)
+        return instances.size();
+    return it->second;
+}
+
 bool Scene::removeInstance(int id) {
     auto it = idIndex.find(id);
     if (it == idIndex.end()) return false;

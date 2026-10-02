@@ -11,6 +11,11 @@ struct ToastItem {
     double expiresAt;
 };
 
+struct LogItem {
+    std::string message;
+    ToastLevel level;
+};
+
 class ToastQueue {
 public:
     void push(const std::string& msg, ToastLevel lvl = ToastLevel::Info,
@@ -36,4 +41,17 @@ private:
         return duration<double>(steady_clock::now().time_since_epoch()).count();
     }
     std::vector<ToastItem> toasts;
+};
+
+class ConsoleLog {
+public:
+    void push(const std::string& msg, ToastLevel level) {
+        entries.push_back({ msg, level });
+    }
+
+    const std::vector<LogItem>& items() const { return entries; }
+    void clear() { entries.clear(); }
+
+private:
+    std::vector<LogItem> entries;
 };

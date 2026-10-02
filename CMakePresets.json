@@ -9,6 +9,9 @@
       "architecture": "x64",
       "toolset": "v143",
       "binaryDir": "${sourceDir}/build",
+      "environment": {
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
+      },
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-v143",

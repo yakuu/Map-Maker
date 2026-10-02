@@ -4,14 +4,15 @@
 #include "Core/Commands.h"
 #include "Scene/Scene.h"
 #include "Scene/Camera.h"
-#include "Render/AssetImporter.h"
-#include "Render/InstanceRenderer.h"
 
 #include <imgui.h>
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 /* =====================================================================
@@ -36,11 +37,17 @@ public:
     void onImGui(Application& app) override {
         if (app.selectedInstance > 0) {
             if (auto* i = app.scene.find(app.selectedInstance)) {
+                const Instance before = *i;
+                bool changed = false;
                 ImGui::Text("ID %d  (%s)", i->id, i->meshName.c_str());
-                ImGui::DragFloat3("Position", &i->position.x, 0.05f);
-                ImGui::DragFloat3("Rotation", &i->rotation.x, 0.5f);
-                ImGui::DragFloat3("Scale",    &i->scale.x, 0.01f, 0.001f, 100.0f);
-                ImGui::ColorEdit4("Tint", &i->tint.x);
+                changed |= ImGui::DragFloat3("Position", &i->position.x, 0.05f);
+                changed |= ImGui::DragFloat3("Rotation", &i->rotation.x, 0.5f);
+                changed |= ImGui::DragFloat3("Scale", &i->scale.x, 0.01f, 0.001f, 100.0f);
+                changed |= ImGui::ColorEdit4("Tint", &i->tint.x);
+                if (changed) {
+                    app.commands.push(std::make_unique<InstanceStateCommand>(
+                        &app.scene, before, *i, "Edit Instance"));
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled("G grab   R rotate   S scale");
                 ImGui::TextDisabled("X / Y / Z constrain   |   Ctrl = snap");
@@ -55,6 +62,28 @@ public:
     }
 
 private:
+    static bool rayTriangle(const glm::vec3& origin, const glm::vec3& direction,
+                            const glm::vec3& a, const glm::vec3& b,
+                            const glm::vec3& c, float& distance) {
+        const glm::vec3 edge1 = b - a;
+        const glm::vec3 edge2 = c - a;
+        const glm::vec3 p = glm::cross(direction, edge2);
+        const float determinant = glm::dot(edge1, p);
+        if (std::abs(determinant) < 1e-7f) return false;
+
+        const float invDeterminant = 1.0f / determinant;
+        const glm::vec3 fromA = origin - a;
+        const float u = glm::dot(fromA, p) * invDeterminant;
+        if (u < 0.0f || u > 1.0f) return false;
+
+        const glm::vec3 q = glm::cross(fromA, edge1);
+        const float v = glm::dot(direction, q) * invDeterminant;
+        if (v < 0.0f || u + v > 1.0f) return false;
+
+        distance = glm::dot(edge2, q) * invDeterminant;
+        return distance >= 0.0f;
+    }
+
     static int pick(Application& app, float mx, float my) {
         float vpW = app.viewportImageSize.x;
         float vpH = app.viewportImageSize.y;
@@ -65,20 +94,56 @@ private:
 
         float aspect = vpW / vpH;
         glm::mat4 vp = app.camera.projection(aspect) * app.camera.view();
+        const float ndcX = ((mx - originX) / vpW) * 2.0f - 1.0f;
+        const float ndcY = 1.0f - ((my - originY) / vpH) * 2.0f;
+        const glm::mat4 invVp = glm::inverse(vp);
+        const glm::vec4 nearClip = invVp * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        const glm::vec4 farClip = invVp * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+        if (std::abs(nearClip.w) < 1e-7f || std::abs(farClip.w) < 1e-7f)
+            return -1;
 
-        int best = -1;
-        float bestDist = 24.0f;
+        const glm::vec3 rayOrigin = glm::vec3(nearClip) / nearClip.w;
+        const glm::vec3 rayDirection =
+            glm::normalize(glm::vec3(farClip) / farClip.w - rayOrigin);
+        float closestDistance = std::numeric_limits<float>::max();
+        int closestId = -1;
 
-        for (auto& i : app.scene.instances) {
-            glm::vec4 clip = vp * glm::vec4(i.position, 1.0f);
-            if (clip.w <= 0.0001f) continue;
-            glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            float sx = originX + (ndc.x * 0.5f + 0.5f) * vpW;
-            float sy = originY + (1.0f - (ndc.y * 0.5f + 0.5f)) * vpH;
-            float d = std::sqrt((sx - mx) * (sx - mx) + (sy - my) * (sy - my));
-            if (d < bestDist) { bestDist = d; best = i.id; }
+        for (const Instance& instance : app.scene.instances) {
+            if (std::abs(instance.scale.x) < 1e-7f ||
+                std::abs(instance.scale.y) < 1e-7f ||
+                std::abs(instance.scale.z) < 1e-7f)
+                continue;
+            const Mesh* mesh = app.renderer.getMesh(instance.meshHash);
+            if (!mesh) continue;
+            const auto& vertices = mesh->pickVertices();
+            const auto& indices = mesh->pickIndices();
+            if (vertices.empty() || indices.size() < 3) continue;
+
+            const glm::mat4 invModel = glm::inverse(Application::modelMatrix(instance));
+            const glm::vec4 localOrigin4 = invModel * glm::vec4(rayOrigin, 1.0f);
+            if (std::abs(localOrigin4.w) < 1e-7f) continue;
+            const glm::vec3 localOrigin = glm::vec3(localOrigin4) / localOrigin4.w;
+            const glm::vec3 localDirection =
+                glm::vec3(invModel * glm::vec4(rayDirection, 0.0f));
+
+            for (size_t triangle = 0; triangle + 2 < indices.size(); triangle += 3) {
+                const uint32_t ia = indices[triangle];
+                const uint32_t ib = indices[triangle + 1];
+                const uint32_t ic = indices[triangle + 2];
+                if (ia >= vertices.size() || ib >= vertices.size() ||
+                    ic >= vertices.size())
+                    continue;
+
+                float distance = 0.0f;
+                if (rayTriangle(localOrigin, localDirection, vertices[ia],
+                                vertices[ib], vertices[ic], distance) &&
+                    distance < closestDistance) {
+                    closestDistance = distance;
+                    closestId = instance.id;
+                }
+            }
         }
-        return best;
+        return closestId;
     }
 };
 
@@ -120,6 +185,10 @@ public:
         return activeHint;
     }
 
+    void onDeactivate(Application& app) override {
+        if (op != Op::None) cancel(app);
+    }
+
     void onUpdate(Application& app, float dt) override;
     void onImGui(Application&) override {
         ImGui::TextDisabled("Click to select an object, then:");
@@ -143,6 +212,7 @@ private:
     glm::vec3 snapshotPos{0};
     glm::vec3 snapshotRot{0};
     glm::vec3 snapshotScale{1};
+    Instance snapshotInstance;
 
     glm::vec2 startMouse{0,0};
     bool      startMouseDown = false;
@@ -172,6 +242,7 @@ void TransformTool::begin(Application& app, Op newOp) {
     snapshotPos   = inst->position;
     snapshotRot   = inst->rotation;
     snapshotScale = inst->scale;
+    snapshotInstance = *inst;
 
     ImVec2 m = ImGui::GetIO().MousePos;
     startMouse = { m.x, m.y };
@@ -272,23 +343,9 @@ void TransformTool::applyDelta(Application& app, glm::vec2 dm, float mul, bool s
 void TransformTool::commit(Application& app) {
     Instance* inst = app.scene.find(targetId);
     if (inst) {
-        Instance before;
-        before.id = targetId;
-        before.position = snapshotPos;
-        before.rotation = snapshotRot;
-        before.scale    = snapshotScale;
-
         Instance after = *inst;
-
-        struct Cmd : Command {
-            Scene* s; int id; Instance b, a;
-            Cmd(Scene* sc, int id, Instance b, Instance a)
-                : s(sc), id(id), b(b), a(a) {}
-            void apply() override { if (auto* i = s->find(id)) *i = a; }
-            void revert() override { if (auto* i = s->find(id)) *i = b; }
-            const char* name() const override { return "Transform"; }
-        };
-        app.commands.push(std::make_unique<Cmd>(&app.scene, targetId, before, after));
+        app.commands.push(std::make_unique<InstanceStateCommand>(
+            &app.scene, snapshotInstance, after, "Transform"));
     }
     op = Op::None;
     axis = Axis::None;
@@ -351,7 +408,8 @@ void TransformTool::onUpdate(Application& app, float) {
 
     if (op == Op::None) {
         if (app.selectedInstance <= 0) return;
-        if (ImGui::GetIO().WantTextInput) return;
+        if (ImGui::GetIO().WantTextInput || ImGui::GetIO().WantCaptureKeyboard)
+            return;
         if (eG) begin(app, Op::Grab);
         else if (eR) begin(app, Op::Rotate);
         else if (eS) begin(app, Op::Scale);
@@ -432,6 +490,9 @@ public:
         }
         stroke.clear();
     }
+    void onDeactivate(Application& app) override {
+        if (painting) onMouseUp(app, 0, 0.0f, 0.0f);
+    }
 
     void onImGui(Application&) override {
         ImGui::SliderInt("Radius", &radius, 0, 12);
@@ -498,9 +559,16 @@ public:
     }
 
     void onMouseDown(Application&, int button, float, float) override {
-        if (button == 0) sculpting = true;
+        if (button != 0) return;
+        sculpting = true;
+        edits.clear();
+        editedVertices.clear();
+        flattenValid = false;
     }
-    void onMouseUp(Application&, int, float, float) override { sculpting = false; }
+    void onMouseUp(Application& app, int, float, float) override {
+        finishStroke(app);
+    }
+    void onDeactivate(Application& app) override { finishStroke(app); }
 
     void onUpdate(Application& app, float) override {
         if (sculpting) applyBrush(app, app.hoveredHmVertex);
@@ -518,6 +586,25 @@ private:
     bool  sculpting = false;
     bool  flattenValid = false;
     float flattenTarget = 0.0f;
+    std::vector<HeightmapStrokeCommand::VertexEdit> edits;
+    std::unordered_map<size_t, size_t> editedVertices;
+
+    void finishStroke(Application& app) {
+        if (!sculpting) return;
+        sculpting = false;
+        edits.erase(std::remove_if(edits.begin(), edits.end(),
+                                   [](const auto& edit) {
+                                       return edit.before == edit.after;
+                                   }),
+                    edits.end());
+        if (!edits.empty()) {
+            app.commands.push(std::make_unique<HeightmapStrokeCommand>(
+                &app.scene, std::move(edits)));
+            edits.clear();
+            editedVertices.clear();
+        }
+        flattenValid = false;
+    }
 
     void applyBrush(Application& app, const Application::HmHover& hov) {
         if (!hov.valid) return;
@@ -536,6 +623,10 @@ private:
             float t = 1.0f - (d / radius);
             t = t * t * (3.0f - 2.0f * t);
             float& h = s.hmAt(x, y);
+            const size_t index = (size_t)y * s.hmW + x;
+            auto [editIt, inserted] = editedVertices.emplace(index, edits.size());
+            if (inserted)
+                edits.push_back({ x, y, h, h });
 
             switch (mode) {
                 case Mode::Raise:  h += t * strength; break;
@@ -553,6 +644,7 @@ private:
                     h += (flattenTarget - h) * t * strength;
                     break;
             }
+            edits[editIt->second].after = h;
         };
 
         int r = (int)std::ceil(radius);
@@ -601,13 +693,18 @@ public:
         if (button != 0) return;
         if (!app.hoveredGatCell.valid) return;
         painting = true;
+        edits.clear();
+        editedCells.clear();
         paintAt(app, app.hoveredGatCell.x, app.hoveredGatCell.y);
     }
     void onMouseMove(Application& app, float, float) override {
         if (!painting || !app.hoveredGatCell.valid) return;
         paintAt(app, app.hoveredGatCell.x, app.hoveredGatCell.y);
     }
-    void onMouseUp(Application&, int, float, float) override { painting = false; }
+    void onMouseUp(Application& app, int, float, float) override {
+        finishStroke(app);
+    }
+    void onDeactivate(Application& app) override { finishStroke(app); }
 
     void onImGui(Application&) override {
         ImGui::SliderInt("Radius", &radius, 0, 8);
@@ -615,6 +712,25 @@ public:
     }
 
 private:
+    std::vector<TextureStrokeCommand::CellEdit> edits;
+    std::unordered_set<size_t> editedCells;
+
+    void finishStroke(Application& app) {
+        if (!painting) return;
+        painting = false;
+        edits.erase(std::remove_if(edits.begin(), edits.end(),
+                                   [](const auto& edit) {
+                                       return edit.before == edit.after;
+                                   }),
+                    edits.end());
+        if (!edits.empty()) {
+            app.commands.push(std::make_unique<TextureStrokeCommand>(
+                &app.scene, std::move(edits)));
+            edits.clear();
+            editedCells.clear();
+        }
+    }
+
     void paintAt(Application& app, int cx, int cy) {
         Scene& s = app.scene;
         for (int y = cy - radius; y <= cy + radius; ++y)
@@ -622,55 +738,21 @@ private:
                 if (!s.inBounds(x, y)) continue;
                 int dx = x - cx, dy = y - cy;
                 if (dx * dx + dy * dy > radius * radius) continue;
-                s.textureLayers[(size_t)y * s.gatW + x] = (uint8_t)layer;
+                const size_t index = (size_t)y * s.gatW + x;
+                uint8_t& cell = s.textureLayers[index];
+                if (cell == (uint8_t)layer) continue;
+                if (editedCells.insert(index).second)
+                    edits.push_back({ x, y, cell, (uint8_t)layer });
+                else {
+                    for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
+                        if (it->x == x && it->y == y) {
+                            it->after = (uint8_t)layer;
+                            break;
+                        }
+                    }
+                }
+                cell = (uint8_t)layer;
             }
-    }
-};
-
-/* =====================================================================
-   Import Tool
-   ===================================================================== */
-
-class ImportTool : public ITool {
-public:
-    char path[512] = "Assets/model.obj";
-
-    const char* name() const override { return "Import Asset"; }
-    const char* description() const override { return "Load an .obj/.fbx/.gltf and place it."; }
-    const char* statusHint() const override {
-        return "Edit path, press Load   |   Or drag from the Content panel";
-    }
-
-    void onImGui(Application& app) override {
-        ImGui::InputText("Path", path, sizeof(path));
-        if (ImGui::Button("Load", ImVec2(120, 0))) {
-            doImport(app, path);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Browse...", ImVec2(140, 0))) {
-            app.importModalOpen = true;
-        }
-        ImGui::TextDisabled("Uses assimp (obj/fbx/gltf/glb/dae/ply/stl).");
-    }
-
-    static bool doImport(Application& app, const std::string& p) {
-        Mesh m;
-        std::string err;
-        if (!AssetImporter::loadMeshInto(p, m, err)) {
-            app.pushToast("Import failed: " + err, ToastLevel::Error);
-            return false;
-        }
-        size_t hash = AssetRegistry::hashPath(p);
-        app.renderer.setMesh(hash, std::move(m));
-
-        Instance inst;
-        inst.meshHash = hash;
-        inst.meshName = p;
-        inst.meshPath = p;
-        inst.position = { 0, 0, 0 };
-        app.scene.addInstance(inst);
-        app.pushToast("Imported " + p);
-        return true;
     }
 };
 
@@ -679,6 +761,7 @@ public:
    ===================================================================== */
 
 void ToolManager::init(Application& app) {
+    this->app = &app;
     addTool(std::make_unique<SelectTool>());
     addTool(std::make_unique<TransformTool>());
 
@@ -689,12 +772,15 @@ void ToolManager::init(Application& app) {
 
     addTool(std::make_unique<LandscapeTool>());
     addTool(std::make_unique<TexturePaintTool>());
-    addTool(std::make_unique<ImportTool>());
 
     activeIdx = 0;
+    if (auto* t = active()) t->onActivate(app);
 }
 
-void ToolManager::shutdown() { tools.clear(); }
+void ToolManager::shutdown() {
+    tools.clear();
+    app = nullptr;
+}
 
 ITool* ToolManager::active() const {
     if (activeIdx < 0 || activeIdx >= (int)tools.size()) return nullptr;
@@ -703,17 +789,33 @@ ITool* ToolManager::active() const {
 
 void ToolManager::setActive(int index) {
     if (index < 0 || index >= (int)tools.size()) return;
+    if (index == activeIdx) return;
+    if (app) {
+        if (auto* t = active()) t->onDeactivate(*app);
+        if (index >= GatPaintToolIndex && index <= TexturePaintToolIndex) {
+            tools[TransformToolIndex]->onDeactivate(*app);
+            app->selectedInstance = -1;
+            app->gizmoDragAxis = 0;
+            app->gizmoDragTargetId = -1;
+            app->transformActive = false;
+        }
+    }
     activeIdx = index;
+    if (app) {
+        if (auto* t = active()) t->onActivate(*app);
+    }
 }
 
 void ToolManager::update(Application& app, float dt) {
-    // Update every tool - the Transform tool must respond to G/R/S
-    // regardless of which tool is currently selected.
-    for (auto& t : tools) t->onUpdate(app, dt);
+    for (size_t i = 0; i < tools.size(); ++i) {
+        if ((int)i == activeIdx ||
+            (activeIdx == SelectToolIndex && (int)i == TransformToolIndex))
+            tools[i]->onUpdate(app, dt);
+    }
 }
 
-void ToolManager::onImGui(Application& app) {
-    if (ImGui::Begin("Tools")) {
+void ToolManager::onImGui(Application& app, bool* open) {
+    if (ImGui::Begin("Tools", open)) {
         for (int i = 0; i < (int)tools.size(); ++i) {
             bool sel = (i == activeIdx);
             ImGui::PushID(i);

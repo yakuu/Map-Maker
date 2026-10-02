@@ -11,11 +11,19 @@ class Application;
 
 class ToolManager {
 public:
+    enum ToolIndex {
+        SelectToolIndex,
+        TransformToolIndex,
+        GatPaintToolIndex,
+        LandscapeToolIndex,
+        TexturePaintToolIndex
+    };
+
     void init(Application& app);
     void shutdown();
 
     void update(Application& app, float dt);
-    void onImGui(Application& app);
+    void onImGui(Application& app, bool* open = nullptr);
     void drawRadialMenu(Application& app);
     void drawStatusBar(Application& app);
 
@@ -36,6 +44,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<ITool>> tools;
+    Application* app = nullptr;
     int activeIdx = 0;
 };
 

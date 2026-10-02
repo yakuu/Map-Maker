@@ -23,6 +23,8 @@ struct GLFWwindow;
 
 class Application {
 public:
+    static constexpr const char* kImGuiLayoutPath = "imgui-v2.ini";
+
     bool init();
     void run();
     void shutdown();
@@ -31,6 +33,7 @@ public:
     Config config;
     Shortcuts shortcuts;
     ToastQueue toasts;
+    ConsoleLog consoleLog;
     Camera camera;
     Scene scene;
     InstanceRenderer renderer;
@@ -41,6 +44,15 @@ public:
 
     int viewportW = 1600, viewportH = 900;
     bool cursorCaptured = false;
+    bool showViewport = true;
+    bool showTools = true;
+    bool showContent = true;
+    bool showSceneList = true;
+    bool showConfig = true;
+    bool showMaterials = true;
+    bool showConsole = false;
+    bool showStatusBar = true;
+    bool showNotifications = true;
     bool showGatOverlay = true;
     bool showTextureOverlay = false;
     int selectedInstance = -1;
@@ -92,6 +104,7 @@ public:
     int       gizmoHoverAxis    = 0;
     bool      gizmoDragScaling  = false;
     int       gizmoDragTargetId = -1;
+    Instance  gizmoDragStartInstance;
     glm::vec3 gizmoDragStartPos{ 0 };
     glm::vec3 gizmoDragStartScale{ 1 };
     glm::vec2 gizmoDragClickMouse{ 0 };
@@ -101,6 +114,7 @@ public:
     float     gizmoDragWorldLen  = 1.0f;
 
     void pushToast(const std::string& msg, ToastLevel lvl = ToastLevel::Info) {
+        consoleLog.push(msg, lvl);
         toasts.push(msg, lvl);
     }
 

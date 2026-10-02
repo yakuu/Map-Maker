@@ -20,7 +20,11 @@ using namespace AppInternal;
 
 void Application::drawViewportWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("Viewport");
+    if (!ImGui::Begin("Viewport", &showViewport)) {
+        ImGui::End();
+        ImGui::PopStyleVar();
+        return;
+    }
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     int w = (int)avail.x, h = (int)avail.y;
@@ -77,7 +81,9 @@ void Application::drawViewportWindow() {
                     inst.meshName = entry ? entry->name : "asset";
                     inst.meshPath = entry ? entry->fullPath : "";
                     inst.position = hit;
-                    scene.addInstance(inst);
+                    const int id = scene.addInstance(inst);
+                    commands.push(std::make_unique<InstancePresenceCommand>(
+                        &scene, *scene.find(id), scene.indexOf(id), true, "Place Asset"));
                     pushToast("Placed " +
                               (entry ? entry->name : std::string("asset")));
                 }
@@ -173,15 +179,10 @@ void Application::drawViewportWindow() {
 
     // -------------------------------------------------------------------
     // Right-click quick menu.
-    //
-    // Open the popup whenever the viewport is hovered (and not captured) so
-    // the user always gets feedback — even for tools that don't implement a
-    // quick menu. The popup content below decides whether to show options or
-    // a "no quick options" notice.
     // -------------------------------------------------------------------
     if (hovered && !cursorCaptured &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-        if (tools.active()) {
+        if (auto* t = tools.active(); t && t->hasQuickMenu()) {
             ImGui::OpenPopup("ToolQuickMenu");
         }
     }
@@ -242,14 +243,10 @@ void Application::drawViewportWindow() {
     if (ImGui::BeginPopup("ToolQuickMenu")) {
         if (auto* t = tools.active()) {
             ImGui::TextColored(ImVec4(0.62f, 0.85f, 1.0f, 1.0f), "%s", t->name());
-            if (t->hasQuickMenu()) {
-                ImGui::TextDisabled("Right-click in viewport to reopen");
-                ImGui::Separator();
-                ImGui::SetNextItemWidth(180);
-                t->drawQuickMenu(*this);
-            } else {
-                ImGui::TextDisabled("No quick options for this tool");
-            }
+            ImGui::TextDisabled("Right-click in viewport to reopen");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(180);
+            t->drawQuickMenu(*this);
         }
         ImGui::EndPopup();
     }
@@ -447,26 +444,11 @@ bool Application::handleGizmoInput(const ImVec2& mouse, bool clicked, bool down,
     if (gizmoDragAxis != 0) {
         if (released) {
             if (auto* inst = scene.find(gizmoDragTargetId)) {
-                Instance before;
-                before.id = gizmoDragTargetId;
-                before.position = gizmoDragStartPos;
-                before.scale    = gizmoDragStartScale;
-
                 Instance after = *inst;
                 bool scaling = gizmoDragScaling;
-
-                struct Cmd : Command {
-                    Scene* s; int id; Instance b, a; bool scaling;
-                    Cmd(Scene* sc, int id, Instance b, Instance a, bool sc2)
-                        : s(sc), id(id), b(b), a(a), scaling(sc2) {}
-                    void apply() override { if (auto* i = s->find(id)) *i = a; }
-                    void revert() override { if (auto* i = s->find(id)) *i = b; }
-                    const char* name() const override {
-                        return scaling ? "Gizmo Scale" : "Gizmo Move";
-                    }
-                };
-                commands.push(std::make_unique<Cmd>(
-                    &scene, gizmoDragTargetId, before, after, scaling));
+                commands.push(std::make_unique<InstanceStateCommand>(
+                    &scene, gizmoDragStartInstance, after,
+                    scaling ? "Gizmo Scale" : "Gizmo Move"));
             }
             gizmoDragAxis = 0;
             gizmoDragTargetId = -1;
@@ -553,6 +535,7 @@ bool Application::handleGizmoInput(const ImVec2& mouse, bool clicked, bool down,
     gizmoDragAxis     = gizmoHoverAxis;
     gizmoDragScaling  = ImGui::GetIO().KeyShift;
     gizmoDragTargetId = inst->id;
+    gizmoDragStartInstance = *inst;
     gizmoDragStartPos = inst->position;
     gizmoDragStartScale = inst->scale;
     gizmoDragClickMouse = { mouse.x, mouse.y };

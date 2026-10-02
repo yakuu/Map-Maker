@@ -74,7 +74,9 @@ public:
 
     Instance* find(int id);
     int addInstance(Instance inst);
+    void insertInstance(Instance inst, size_t index);
     bool removeInstance(int id);
+    size_t indexOf(int id) const;
 
     // If you ever mutate `instances` directly (the member is public for
     // historical reasons), call this afterwards to resync the lookup.

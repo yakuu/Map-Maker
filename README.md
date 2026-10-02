@@ -200,7 +200,7 @@ The requested function isn't in `LoadGLFunctions`. Add it to `GL.h` (typedef + e
 
 ### Panels look empty
 
-Delete `bin/imgui.ini` or use **View → Reset layout**. The default layout is built once per process the first time `imgui.ini` doesn't exist.
+Delete `imgui-v2.ini` in the application's working directory or use **View → Reset layout**. The default layout is built once per process the first time `imgui-v2.ini` doesn't exist.
 
 
 ## Controls
@@ -224,13 +224,25 @@ Default bindings come from `config/shortcuts.json`. Mouse codes `1000+` are cust
 | Pitch camera down | Numpad 1 (`321`, `GLFW_KEY_KP_1`) | `camera.pitchDown` |
 | Reset camera | Numpad 2 (`322`, `GLFW_KEY_KP_2`) | `camera.reset` |
 | Radial tool menu | Tab (`258`, `GLFW_KEY_TAB`) | `tool.radial` |
+| Select tool | F1 (`290`, `GLFW_KEY_F1`) | `tool.select` |
+| Transform tool | F2 (`291`, `GLFW_KEY_F2`) | `tool.transform` |
+| GAT paint tool | F3 (`292`, `GLFW_KEY_F3`) | `tool.gatPaint` |
+| Landscape tool | F4 (`293`, `GLFW_KEY_F4`) | `tool.landscape` |
+| Texture paint tool | F5 (`294`, `GLFW_KEY_F5`) | `tool.texturePaint` |
 | Release cursor / cancel | Esc (`256`, `GLFW_KEY_ESCAPE`) | `tool.cancel` |
 | Undo | Z (`90`, `GLFW_KEY_Z`) | `edit.undo` |
 | Redo | Y (`89`, `GLFW_KEY_Y`) | `edit.redo` |
 | Delete selected instance | Delete (`261`, `GLFW_KEY_DELETE`) | `edit.delete` |
-| Save to `Save/map.json` | F5 (`294`, `GLFW_KEY_F5`) | `save.quick` |
-| Toggle GAT overlay | F4 (`293`, `GLFW_KEY_F4`) | `view.toggleGat` |
+| Save to `Save/map.json` | F6 (`295`, `GLFW_KEY_F6`) | `save.quick` |
+| Load `Save/map.json` | F9 (`298`, `GLFW_KEY_F9`) | `load.quick` |
+| Toggle GAT overlay | F7 (`296`, `GLFW_KEY_F7`) | `view.toggleGat` |
 | Toggle texture-layer overlay | L (`76`, `GLFW_KEY_L`) | `view.toggleLandscape` |
+| Capture cursor for look | Alt (built-in) | `camera.lookAlt` |
+
+Undo and redo use the configured GLFW key codes (`edit.undo` and `edit.redo`).
+GLFW key codes describe physical key positions; the printed letter can differ
+by keyboard layout (for example, the German Y/Z positions). The Config panel
+shows the GLFW key name so it can be compared with the active keyboard layout.
 
 ### Transform (Blender-inspired)
 

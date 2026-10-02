@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include <filesystem>
+#include <iterator>
 #include <string>
 
 void Application::focusSelected() {
@@ -22,18 +23,33 @@ void Application::duplicateSelected() {
         copy.position += glm::vec3(0.5f, 0.0f, 0.0f);
         int newId = scene.addInstance(copy);
         selectedInstance = newId;
+        commands.push(std::make_unique<InstancePresenceCommand>(
+            &scene, *scene.find(newId), scene.indexOf(newId), true, "Duplicate Instance"));
         pushToast("Duplicated instance " + std::to_string(newId));
     }
 }
 
 void Application::handleGlobalKeys() {
-    if (shortcuts.justPressed("edit.undo")) {
+    static const char* const toolActions[] = {
+        "tool.select", "tool.transform", "tool.gatPaint",
+        "tool.landscape", "tool.texturePaint"
+    };
+    if (!ImGui::GetIO().WantTextInput) {
+        for (int i = 0; i < (int)std::size(toolActions); ++i) {
+            if (shortcuts.justPressed(toolActions[i])) tools.setActive(i);
+        }
+    }
+
+    const bool keyboardCaptured = ImGui::GetIO().WantTextInput ||
+                                  ImGui::GetIO().WantCaptureKeyboard;
+    if (!keyboardCaptured && shortcuts.justPressed("edit.undo")) {
         if (commands.undo()) pushToast("Undo");
     }
-    if (shortcuts.justPressed("edit.redo")) {
+    if (!keyboardCaptured && shortcuts.justPressed("edit.redo")) {
         if (commands.redo()) pushToast("Redo");
     }
     if (shortcuts.justPressed("save.quick")) trySave();
+    if (shortcuts.justPressed("load.quick")) tryLoad();
     if (shortcuts.justPressed("view.toggleGat")) {
         showGatOverlay = !showGatOverlay;
         pushToast(showGatOverlay ? "GAT overlay ON" : "GAT overlay OFF");
@@ -42,8 +58,14 @@ void Application::handleGlobalKeys() {
         showTextureOverlay = !showTextureOverlay;
         pushToast(showTextureOverlay ? "Texture overlay ON" : "Texture overlay OFF");
     }
-    if (shortcuts.justPressed("edit.delete") && selectedInstance > 0) {
-        scene.removeInstance(selectedInstance);
+    if (!keyboardCaptured && shortcuts.justPressed("edit.delete") && selectedInstance > 0) {
+        if (auto* instance = scene.find(selectedInstance)) {
+            const Instance deleted = *instance;
+            const size_t index = scene.indexOf(selectedInstance);
+            scene.removeInstance(selectedInstance);
+            commands.push(std::make_unique<InstancePresenceCommand>(
+                &scene, deleted, index, false, "Delete Instance"));
+        }
         pushToast("Deleted instance");
         selectedInstance = -1;
     }
@@ -62,9 +84,10 @@ void Application::handleGlobalKeys() {
     bool fNow = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
     bool dNow = glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
 
-    if (fNow && !prevF && !transformActive && selectedInstance > 0)
+    if (!keyboardCaptured && fNow && !prevF && !transformActive && selectedInstance > 0)
         focusSelected();
-    if (ctrl && dNow && !prevD && !transformActive && selectedInstance > 0)
+    if (!keyboardCaptured && ctrl && dNow && !prevD &&
+        !transformActive && selectedInstance > 0)
         duplicateSelected();
 
     prevF = fNow;
@@ -94,7 +117,15 @@ void Application::resizeHeightmap(int newW, int newH, bool preserve) {
     if (newW < 2 || newH < 2) return;
     if (newW == scene.hmW && newH == scene.hmH) return;
 
+    HeightmapResizeCommand::State before{
+        scene.hmW, scene.hmH, scene.hmCell, scene.hmOrigin, scene.heightmap
+    };
     scene.resizeHeightmap(newW, newH, preserve);
+    HeightmapResizeCommand::State after{
+        scene.hmW, scene.hmH, scene.hmCell, scene.hmOrigin, scene.heightmap
+    };
+    commands.push(std::make_unique<HeightmapResizeCommand>(
+        &scene, std::move(before), std::move(after)));
 
     // Force a mesh rebuild on the next frame.
     renderedHeightmapVersion = -1;
